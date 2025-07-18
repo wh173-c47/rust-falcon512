@@ -85,7 +85,7 @@ pub fn verify_distance(
     shake_inject(&mut shake_ctx, &nonce_msg);
     shake_flip(&mut shake_ctx);
 
-    let extracted = shake_extract(&mut shake_ctx, (M << 0x1) as usize);
+    let extracted = shake_extract(&mut shake_ctx);
 
     let mut tmp_buff = [0u16; 512];
     let mut hash_nonce_msg = [0u16; 512];

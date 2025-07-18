@@ -14,7 +14,7 @@ use crate::{
         SIG_COMP_MAXSIZE
     },
     shake256::{shake_inject, shake_flip, shake_extract },
-    utils::{mq_add, mq_sub, mq_montymul, revert, sign_extend_u16_to_u32, submod, swap_byte_pairs}
+    utils::{mq_add, mq_sub, mq_montymul, revert, sign_extend_u16_to_u32, swap_byte_pairs}
 };
 
 // TODO: see below if no branching worth vs early exited branching
@@ -45,7 +45,7 @@ pub fn handle_hash_to_point_chunk(
 // constant-time produces a new point from a flipped shake256 context
 // TODO: optimize further
 pub fn hash_to_point_ct(
-    extracted: &Vec<u64>,
+    extracted: &[u64],
     x: &mut [u16; 512],
     tt1: &mut [u16; 512]
 ) {
@@ -85,7 +85,7 @@ pub fn hash_to_point_ct(
         handle_hash_to_point_chunk(extracted[u + 7], tt1, out_index + 0x1c);
 
         u += 8;
-        out_index += 32;
+        out_index += 0x20;
 
         if u == 0xb0 {
             break;
@@ -126,10 +126,10 @@ pub fn hash_to_point_ct(
             // mk is 0xFFFFFFFFFFFFFFFF... for negative condition
             let mut mk = (sv >> 0xf) - 1;
 
-            // Update v (unsigned arithmetic, subtract mk)
+            // update v (unsigned arithmetic, subtract mk)
             v -= mk;
 
-            // Adjust mk with new condition (same shift as before but in uint256)
+            // adjust mk with new condition (same shift as before but in uint256)
             mk &= 0 - (((j & p as u16) + 0x1ff) >> 0x9);
 
             let xi = u - p;
@@ -335,7 +335,7 @@ pub fn mq_poly_sub(f: &mut [u16; 512], g: &[u16; 512]) {
     let end: usize = N as usize;
 
     loop {
-        f[i] = submod(f[i], g[i], Q);
+        f[i] = mq_sub(f[i], g[i]);
 
         i += 1;
 
@@ -614,7 +614,7 @@ pub fn verify(
     shake_inject(&mut shake_ctx, &nonce_msg);
     shake_flip(&mut shake_ctx);
 
-    let extracted = shake_extract(&mut shake_ctx, (M << 1) as usize);
+    let extracted = shake_extract(&mut shake_ctx);
 
     let mut tmp_buff = [0u16; 512];
     let mut hash_nonce_msg = [0u16; 512];

@@ -116,10 +116,10 @@ fn main() {
 
     // --- Plug your functions in here ---
     // These are dummy functions. Replace them with your actual falcon512 calls.
-    benchmark("Falcon512 Verify NIST Test vector 0", 10_000, || {
+    benchmark("Falcon512 Verify NIST Test vector 0", 50_000, || {
         nist_test_verify_0();
     });
-    benchmark("Falcon512 Verify NIST Test vector 99", 10_000, || {
-         nist_test_verify_99();
-    });
+//     benchmark("Falcon512 Verify NIST Test vector 99", 50_000, || {
+//          nist_test_verify_99();
+//     });
 }

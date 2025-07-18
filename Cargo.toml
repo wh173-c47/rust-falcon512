@@ -8,8 +8,9 @@ name = "falcon512_rs"
 crate-type = ["cdylib", "lib"]
 
 [dev-dependencies]
-allocation-counter = "0.8.1"
 num-format = "0.4.4"
+jemallocator = "0.5.4"
+jemalloc-ctl = "0.5.4"
 
 [features]
 default = []
@@ -34,4 +35,3 @@ strip = true
 rustflags = ["-C", "target-cpu=native"]
 
 [dependencies]
-num = "0.4.3"

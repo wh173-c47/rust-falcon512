@@ -1,8 +1,11 @@
 use std::time::Instant;
 use num_format::{Locale, ToFormattedString};
-// Conditionally compile allocation counting logic only when the 'bench' feature is enabled.
 #[cfg(feature = "bench")]
-use allocation_counter::measure as count_allocations;
+#[global_allocator]
+static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+#[cfg(feature = "bench")]
+use jemalloc_ctl::{epoch, stats};
+
 use falcon512_rs::{tests::test_utils::verify_distance};
 
 pub fn nist_test_verify_0() {
@@ -29,14 +32,12 @@ pub fn nist_test_verify_99() {
     };
 }
 
-
 // A struct to hold all the metrics we gather.
 #[derive(Debug, Default)]
 struct BenchMetrics {
     total_duration_ns: u128,
     total_cpu_cycles: u64,
-    total_allocations: u64,
-    peak_memory_bytes: u64,
+    peak_memory_bytes: usize,
 }
 
 /// A generic benchmarking function that takes any function closure.
@@ -49,21 +50,28 @@ where
     // Warm-up run
     op();
 
+    #[cfg(feature = "bench")]
+    let e = epoch::mib().unwrap();
+    #[cfg(feature = "bench")]
+    let resident = stats::resident::mib().unwrap();
+
     for _ in 0..runs {
         #[cfg(target_arch = "x86_64")]
         let start_cycles = unsafe { core::arch::x86_64::__rdtscp(&mut 0) };
 
+        #[cfg(feature = "bench")]
+        {
+            e.advance().unwrap(); // refresh jemalloc stats
+        }
+
         let start_time = Instant::now();
+        op();
+        let duration = start_time.elapsed();
 
         #[cfg(feature = "bench")]
-        let alloc_info = count_allocations(|| {
-            op();
-        });
-
-        #[cfg(not(feature = "bench"))]
-        op();
-
-        let duration = start_time.elapsed();
+        {
+            e.advance().unwrap();
+        }
 
         #[cfg(target_arch = "x86_64")]
         let end_cycles = unsafe { core::arch::x86_64::__rdtscp(&mut 0) };
@@ -72,8 +80,9 @@ where
 
         #[cfg(feature = "bench")]
         {
-            metrics.total_allocations += alloc_info.count_total;
-            metrics.peak_memory_bytes = metrics.peak_memory_bytes.max(alloc_info.bytes_max);
+            // Count any new allocations that occurred during the op
+            let peak_res = resident.read().unwrap_or(0);
+            metrics.peak_memory_bytes = metrics.peak_memory_bytes.max(peak_res);
         }
 
         #[cfg(target_arch = "x86_64")]
@@ -99,8 +108,7 @@ where
 
     #[cfg(feature = "bench")]
     {
-        let avg_allocs = metrics.total_allocations as f64 / runs as f64;
-        println!("  - Memory: {:.1} allocations, {} bytes peak usage", avg_allocs, metrics.peak_memory_bytes.to_formatted_string(&Locale::en));
+        println!("  - Memory: bytes peak usage {}", metrics.peak_memory_bytes.to_formatted_string(&Locale::en));
     }
     #[cfg(not(feature = "bench"))]
     {
@@ -111,15 +119,11 @@ where
 
 fn main() {
     println!("--- Running Falcon512 Benchmarks ---");
-    println!("--- Date: 2025-07-17 11:36:43 UTC ---");
-    println!("--- User: wh173-c47 ---\n");
 
-    // --- Plug your functions in here ---
-    // These are dummy functions. Replace them with your actual falcon512 calls.
     benchmark("Falcon512 Verify NIST Test vector 0", 50_000, || {
         nist_test_verify_0();
     });
-//     benchmark("Falcon512 Verify NIST Test vector 99", 50_000, || {
-//          nist_test_verify_99();
-//     });
+    benchmark("Falcon512 Verify NIST Test vector 99", 50_000, || {
+        nist_test_verify_99();
+    });
 }

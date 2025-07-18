@@ -55,14 +55,16 @@ pub fn hash_to_point_ct(
     loop {
         let index: usize = u << 0x2;
 
-        handle_hash_to_point_chunk(extracted[u], x, index);
-        handle_hash_to_point_chunk(extracted[u + 1], x, index + 0x4);
-        handle_hash_to_point_chunk(extracted[u + 2], x, index + 0x8);
-        handle_hash_to_point_chunk(extracted[u + 3], x, index + 0xc);
-        handle_hash_to_point_chunk(extracted[u + 4], x, index + 0x10);
-        handle_hash_to_point_chunk(extracted[u + 5], x, index + 0x14);
-        handle_hash_to_point_chunk(extracted[u + 6], x, index + 0x18);
-        handle_hash_to_point_chunk(extracted[u + 7], x, index + 0x1c);
+        unsafe {
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u), x, index);
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 1), x, index + 0x4);
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 2), x, index + 0x8);
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 3), x, index + 0xc);
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 4), x, index + 0x10);
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 5), x, index + 0x14);
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 6), x, index + 0x18);
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 7), x, index + 0x1c);
+        }
 
         u += 8;
 
@@ -75,14 +77,16 @@ pub fn hash_to_point_ct(
 
     // handling `tt1` OVERSAMPLING - 13 unrolled x32 => 6 runs
     loop {
-        handle_hash_to_point_chunk(extracted[u], tt1, out_index);
-        handle_hash_to_point_chunk(extracted[u + 1], tt1, out_index + 0x4);
-        handle_hash_to_point_chunk(extracted[u + 2], tt1, out_index + 0x8);
-        handle_hash_to_point_chunk(extracted[u + 3], tt1, out_index + 0xc);
-        handle_hash_to_point_chunk(extracted[u + 4], tt1, out_index + 0x10);
-        handle_hash_to_point_chunk(extracted[u + 5], tt1, out_index + 0x14);
-        handle_hash_to_point_chunk(extracted[u + 6], tt1, out_index + 0x18);
-        handle_hash_to_point_chunk(extracted[u + 7], tt1, out_index + 0x1c);
+        unsafe {
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u), tt1, out_index);
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 1), tt1, out_index + 0x4);
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 2), tt1, out_index + 0x8);
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 3), tt1, out_index + 0xc);
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 4), tt1, out_index + 0x10);
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 5), tt1, out_index + 0x14);
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 6), tt1, out_index + 0x18);
+            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 7), tt1, out_index + 0x1c);
+        }
 
         u += 8;
         out_index += 0x20;
@@ -92,10 +96,12 @@ pub fn hash_to_point_ct(
         }
     };
 
-    // handles remaining 13 items
-    handle_hash_to_point_chunk(extracted[0xb0], tt1, out_index);
-    handle_hash_to_point_chunk(extracted[0xb1], tt1, out_index + 0x4);
-    handle_hash_to_point_chunk(extracted[0xb2], tt1, out_index + 0x8);
+    unsafe {
+        // handles remaining 13 items
+        handle_hash_to_point_chunk(*extracted.get_unchecked(0xb0), tt1, out_index);
+        handle_hash_to_point_chunk(*extracted.get_unchecked(0xb1), tt1, out_index + 0x4);
+        handle_hash_to_point_chunk(*extracted.get_unchecked(0xb2), tt1, out_index + 0x8);
+    }
 
     let swapped = swap_byte_pairs(extracted[0xb3]);
 
@@ -331,17 +337,8 @@ pub fn mq_poly_montymul_ntt(f: &mut [u16], g: &[u16]) {
 /// * `f` - A mutable slice for the first polynomial, `f`. The result is stored here.
 /// * `g` - An immutable slice for the second polynomial, `g`.
 pub fn mq_poly_sub(f: &mut [u16; 512], g: &[u16; 512]) {
-    let mut i = 0;
-    let end: usize = N as usize;
-
-    loop {
-        f[i] = mq_sub(f[i], g[i]);
-
-        i += 1;
-
-        if i == end {
-            break;
-        }
+    for (f_i, g_i) in f.iter_mut().zip(g.iter()) {
+        *f_i = mq_sub(*f_i, *g_i);
     }
 }
 
@@ -454,7 +451,9 @@ pub fn comp_decode(
 
     v = loop {
         if v < in_max {
-            acc = (acc << 0x8) | (input[v] as u16);
+            unsafe {
+                acc = (acc << 0x8) | (*input.get_unchecked(v) as u16);
+            }
             v += 1;
 
             let b = acc >> acc_len;
@@ -464,9 +463,11 @@ pub fn comp_decode(
             v = loop {
                 if acc_len == 0 {
                     if v < in_max {
-                       acc = (acc << 0x8) | (input[v] as u16);
-                       v += 1;
-                       acc_len = 8;
+                        unsafe {
+                            acc = (acc << 0x8) | (*input.get_unchecked(v) as u16);
+                        }
+                        v += 1;
+                        acc_len = 8;
                     } else {
                         break 0;
                     }

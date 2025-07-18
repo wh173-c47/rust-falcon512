@@ -1,4 +1,4 @@
-use crate::{constants::{M, N, NONCE_LEN, Q, SIG_COMP_MAXSIZE}, falcon512::{hash_to_point_ct, comp_decode, distance, mq_intt, mq_ntt, mq_poly_montymul_ntt, mq_poly_sub}, shake256::{shake_extract, shake_flip, shake_inject}};
+use crate::{constants::{N, NONCE_LEN, Q, SIG_COMP_MAXSIZE}, falcon512::{hash_to_point_ct, comp_decode, distance, mq_intt, mq_ntt, mq_poly_montymul_ntt, mq_poly_sub}, shake256::{shake_extract, shake_flip, shake_inject}};
 
 
 // internal signature verification

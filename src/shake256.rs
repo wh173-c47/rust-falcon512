@@ -1,5 +1,4 @@
 use crate::{constants::{SHAKE256_RATE, SHAKE_ROUND_CONSTANTS}};
-use num::integer::div_rem;
 
 #[inline(always)]
 fn theta_rho_step_1(shake_ctx: &mut [u64; 26]) {
@@ -328,7 +327,8 @@ pub fn shake_inject(
     in_len -= loop_end;
 
     if in_len != 0 {
-        let (full_words_in_remainder, final_bytes) = div_rem(in_len, 8);
+        let full_words_in_remainder = in_len / 0x8;
+        let final_bytes = in_len & 0x7;
 
         let mut i = 0;
 
@@ -368,7 +368,7 @@ pub fn shake_flip(shake_ctx: &mut [u64; 26]) {
     let rate_sub_1 = SHAKE256_RATE - 1;
     let o2: usize = (rate_sub_1 >> 0x3) as usize;
 
-    shake_ctx[o2] ^= 0x80 << ((rate_sub_1 & 7) << 0x3);
+    shake_ctx[o2] ^= 0x80 << ((rate_sub_1 & 0x7) << 0x3);
     shake_ctx[25] = SHAKE256_RATE as u64;
 }
 
@@ -383,29 +383,28 @@ pub fn shake_extract(
     // M << 1
     let len = 1434;
 
-    // Create the array on the stack, initialized to zero.
     let mut out = [0u64; OUT_CAPACITY_WORDS];
-    // Manually track the number of words written to the output array.
     let mut words_written = 0;
 
     let rate_usize = SHAKE256_RATE as usize;
-    let (full_runs, remainder_bytes) = div_rem(len, rate_usize);
+    let full_runs = len / rate_usize;
+    let remainder_bytes = len % rate_usize;
 
     for _ in 0..full_runs {
         process_block(shake_ctx);
 
-        // Get a mutable slice of the `out` array for the next block.
         let dest_slice = &mut out[words_written..words_written + 17];
-        // Copy the data from the context into the destination slice.
+
         dest_slice.copy_from_slice(&shake_ctx[..17]);
-        // Update the write position.
+
         words_written += 17;
     }
 
     if remainder_bytes > 0 {
         process_block(shake_ctx);
 
-        let (remainder_words, partial_word_bytes) = div_rem(remainder_bytes, 8);
+        let remainder_words = remainder_bytes / 0x8;
+        let partial_word_bytes = remainder_bytes & 0x7;
 
         if remainder_words > 0 {
             let dest_slice = &mut out[words_written..words_written + remainder_words];
@@ -414,13 +413,10 @@ pub fn shake_extract(
         }
 
         if partial_word_bytes > 0 {
-            // Get the bytes from the last needed word in the context.
             let src_bytes = shake_ctx[remainder_words].to_le_bytes();
-            // Create a buffer for the new word, initialized to zero.
             let mut packed_bytes = [0u8; 8];
-            // Copy only the required number of bytes.
+
             packed_bytes[..partial_word_bytes].copy_from_slice(&src_bytes[..partial_word_bytes]);
-            // Convert back to a u64 and place it in the output array.
             out[words_written] = u64::from_le_bytes(packed_bytes);
         }
     }

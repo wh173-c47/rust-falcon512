@@ -2,149 +2,334 @@ use crate::{
     constants::{
         errors::E_INVALID_PUBLIC_KEY,
         FALCON_PK_SIZE,
+        OVER_SAMPLING,
         GMB,
         IGMB,
         LOGN,
         M,
         N,
         NONCE_LEN,
-        N_INV,
         Q,
+        R2,
         SIG_COMP_MAXSIZE
     },
-    shake256::{hash_to_point_ct, shake_extract, shake_flip, shake_inject},
-    utils::{addmod, mulmod, revert, sign_extend_u16_to_u32, submod}
+    shake256::{shake_inject, shake_flip, shake_extract },
+    utils::{mq_add, mq_sub, mq_montymul, revert, sign_extend_u16_to_u32, submod, swap_byte_pairs}
 };
 
-/// compute NTT on a ring element
-pub fn mq_ntt(input: &mut[u16; 512]) {
-    let mut t: usize = N as usize;
-    let mut m = 1;
-    let end = t;
+// TODO: see below if no branching worth vs early exited branching
+#[inline(always)]
+fn handle_hash_to_point_bytes_pair(pair: u64) -> u16 {
+    let mut r = pair - (24578 & ((pair - 24578 >> 63) - 1));
+
+    r = r - (24578 & (((r - 24578) >> 63) - 1));
+    r = r - (12289 & (((r - 12289) >> 63) - 1));
+
+    (r | ((pair - 61445) >> 63) - 1) as u16
+}
+
+#[inline(always)]
+pub fn handle_hash_to_point_chunk(
+    chunk: u64,
+    out: &mut [u16; 512],
+    index: usize
+) {
+    let swapped = swap_byte_pairs(chunk);
+
+    out[index] = handle_hash_to_point_bytes_pair(swapped & 0xffff);
+    out[index + 1] = handle_hash_to_point_bytes_pair(swapped >> 0x10 & 0xffff);
+    out[index + 2] = handle_hash_to_point_bytes_pair(swapped >> 0x20 & 0xffff);
+    out[index + 3] = handle_hash_to_point_bytes_pair(swapped >> 0x30);
+}
+
+// constant-time produces a new point from a flipped shake256 context
+// TODO: optimize further
+pub fn hash_to_point_ct(
+    extracted: &Vec<u64>,
+    x: &mut [u16; 512],
+    tt1: &mut [u16; 512]
+) {
+    let mut u = 0;
+
+    // handling `x` len 512, unrolled x32 => 16 runs
+    loop {
+        let index: usize = u << 0x2;
+
+        handle_hash_to_point_chunk(extracted[u], x, index);
+        handle_hash_to_point_chunk(extracted[u + 1], x, index + 0x4);
+        handle_hash_to_point_chunk(extracted[u + 2], x, index + 0x8);
+        handle_hash_to_point_chunk(extracted[u + 3], x, index + 0xc);
+        handle_hash_to_point_chunk(extracted[u + 4], x, index + 0x10);
+        handle_hash_to_point_chunk(extracted[u + 5], x, index + 0x14);
+        handle_hash_to_point_chunk(extracted[u + 6], x, index + 0x18);
+        handle_hash_to_point_chunk(extracted[u + 7], x, index + 0x1c);
+
+        u += 8;
+
+        if u == 0x80 {
+            break;
+        }
+    };
+
+    let mut out_index = 0;
+
+    // handling `tt1` OVERSAMPLING - 13 unrolled x32 => 6 runs
+    loop {
+        handle_hash_to_point_chunk(extracted[u], tt1, out_index);
+        handle_hash_to_point_chunk(extracted[u + 1], tt1, out_index + 0x4);
+        handle_hash_to_point_chunk(extracted[u + 2], tt1, out_index + 0x8);
+        handle_hash_to_point_chunk(extracted[u + 3], tt1, out_index + 0xc);
+        handle_hash_to_point_chunk(extracted[u + 4], tt1, out_index + 0x10);
+        handle_hash_to_point_chunk(extracted[u + 5], tt1, out_index + 0x14);
+        handle_hash_to_point_chunk(extracted[u + 6], tt1, out_index + 0x18);
+        handle_hash_to_point_chunk(extracted[u + 7], tt1, out_index + 0x1c);
+
+        u += 8;
+        out_index += 32;
+
+        if u == 0xb0 {
+            break;
+        }
+    };
+
+    // handles remaining 13 items
+    handle_hash_to_point_chunk(extracted[0xb0], tt1, out_index);
+    handle_hash_to_point_chunk(extracted[0xb1], tt1, out_index + 0x4);
+    handle_hash_to_point_chunk(extracted[0xb2], tt1, out_index + 0x8);
+
+    let swapped = swap_byte_pairs(extracted[0xb3]);
+
+    tt1[out_index + 0xc] = handle_hash_to_point_bytes_pair(swapped & 0xffff);
+
+    let mut p = 1;
 
     loop {
-        let ht: usize = (t >> 0x1) as usize;
-        let mut j1 = 0;
-        let mut i = 0;
+        let mut v: u16 = 0;
+        let mut u: usize = 0;
+
+        // skip first round if u < p
+        loop {
+            // Update v (unsigned arithmetic, subtract mk)
+            v -= (x[u] >> 0xf) - 1;
+            u += 1;
+
+            if u == p {
+                break;
+            }
+        };
+
+        // first loop for `u < _N`
+        loop {
+            let sv: u16 = x[u];
+            let j = u as u16 - v;
+            // mk = (sv >> 15) - 1 (but we work in uint256 now)
+            // mk is 0xFFFFFFFFFFFFFFFF... for negative condition
+            let mut mk = (sv >> 0xf) - 1;
+
+            // Update v (unsigned arithmetic, subtract mk)
+            v -= mk;
+
+            // Adjust mk with new condition (same shift as before but in uint256)
+            mk &= 0 - (((j & p as u16) + 0x1ff) >> 0x9);
+
+            let xi = u - p;
+            let dv = x[xi];
+            let mk_and_sv_xor_dv = mk & (sv ^ dv);
+
+            x[xi] = dv ^ mk_and_sv_xor_dv;
+            x[u] = sv ^ mk_and_sv_xor_dv;
+
+            u += 1;
+
+            if u == N as usize {
+                break;
+            }
+        };
+
+        // sec loop for `u >= _M || (u - p) >= _N`
 
         loop {
+            let tt1i = u - N as usize;
+            let sv = tt1[tt1i];
+            let j = u as u16 - v;
+            let mut mk = (sv >> 0xf) - 1;
+
+            v -= mk;
+
+            mk &= 0 - (((j & p as u16) + 0x1ff) >> 0x9);
+
+            let xi = u - p;
+            let dv = x[xi];
+            let mk_and_sv_xor_dv = mk & (sv ^ dv);
+
+            x[xi] = dv ^ mk_and_sv_xor_dv;
+            tt1[tt1i] = sv ^ mk_and_sv_xor_dv;
+
+            u += 1;
+
+            if u < M as usize && (u - p) < N as usize {
+                continue;
+            }
+
+            break;
+        };
+
+        // sec loop for `u < _M`
+        loop {
+            let u_sub_n = u - N as usize;
+            let sv = tt1[u_sub_n];
+            let j = u as u16 - v;
+            let mut mk = (sv >> 0xf) - 1;
+
+            v = v - mk;
+
+            mk &= 0 - (((j & p as u16) + 0x1ff) >> 0x9);
+
+            let dvi = u_sub_n - p;
+            let dv = tt1[dvi];
+            let mk_and_sv_xor_dv = mk & (sv ^ dv);
+
+            tt1[dvi] = dv ^ mk_and_sv_xor_dv;
+            tt1[u_sub_n] = sv ^ mk_and_sv_xor_dv;
+
+            u += 1;
+
+            if u == M as usize {
+                break;
+            }
+        };
+
+        p = p << 0x1;
+
+        if p < OVER_SAMPLING as usize {
+            continue;
+        };
+
+        break;
+    };
+}
+
+/// Computes the Number Theoretic Transform (NTT) on a polynomial in-place.
+///
+/// This is a Rust implementation of the Gentleman-Sande (GS) NTT algorithm,
+/// using the Montgomery multiplication for efficiency. It directly corresponds
+/// to the logic in the provided `_mq_NTT` Yul function.
+///
+/// # Arguments
+/// * `p` - A mutable slice representing the polynomial coefficients.
+#[inline(always)]
+pub fn mq_ntt(p: &mut [u16]) {
+    let mut t = N;
+    let mut m = 1;
+
+    while m != N {
+        let ht = t >> 1;
+        let mut j1 = 0;
+
+        for i in 0..m {
+            let s = GMB[(m + i) as usize];
             let j2 = j1 + ht;
-            let s = GMB[m + i];
-            let mut j = j1;
 
-            loop {
-                let u = input[j];
-                let jht = j + ht;
-                let v = mulmod(input[jht], s, Q);
+            for j in j1..j2 {
+                let u = p[j as usize];
+                let v = mq_montymul(p[(j + ht) as usize], s);
 
-                input[j] = addmod(u, v, Q);
-                input[jht] = submod(u, v, Q);
-
-                j += 1;
-
-                if j == j2 {
-                    break;
-                }
-            };
+                p[j as usize] = mq_add(u, v);
+                p[(j + ht) as usize] = mq_sub(u, v);
+            }
 
             j1 += t;
-            i += 1;
-
-            if i == m {
-                break;
-            }
-        };
-
-        t = ht as usize;
-        m = m << 0x1;
-
-        if m == end {
-            break;
         }
-    };
-}
 
-/// compute inverse NTT on a ring element
-/// writes result over `in`
-pub fn mq_intt(input: &mut [u16; 512]) {
-    let mut t = 1;
-    let mut m: usize = N as usize;
-    let end = m;
-
-    loop {
-        let hm = m >> 0x1;
-        let dt = t << 0x1;
-        let mut j1 = 0;
-        let mut i = 0;
-
-        loop {
-            let j2 = j1 + t;
-            let s = IGMB[hm + i];
-            let mut j = j1;
-
-            loop {
-                let u = input[j];
-                let jt = j + t;
-                let v = input[jt];
-
-                input[j] = addmod(u, v, Q);
-                input[jt] = mulmod(submod(u, v, Q), s, Q);
-
-                j += 1;
-
-                if j == j2 {
-                    break;
-                }
-            };
-
-            j1 += dt;
-            i += 1;
-
-            if i == hm {
-                break;
-            }
-        };
-
-        t = dt;
-        m = hm;
-
-        if m == 1 {
-            break;
-        }
-    };
-
-    let mut m = 0;
-
-    loop {
-        input[m] = mulmod(input[m],  N_INV, Q);
-
-        m += 1;
-
-        if m == end {
-            break;
-        }
-    };
-}
-
-// mul two polynomials together (NTT representation)
-// result f*g is written over f
-pub fn mq_poly_ntt(f: &mut [u16; 512], g: &[u16; 512]) {
-    let mut i = 0;
-    let end: usize = N as usize;
-
-    loop {
-        f[i] = mulmod(f[i], g[i], Q);
-
-        i += 1;
-
-        if i == end {
-            break;
-        }
+        t = ht;
+        m = m << 1;
     }
 }
 
-// sub polynomial g from polynomial f
-// result f-g is written over f
+
+/// Computes the Inverse Number Theoretic Transform (iNTT) on a polynomial in-place.
+///
+/// This is a faithful Rust translation of the provided Yul iNTT implementation,
+/// including the specific final normalization logic.
+///
+/// # Arguments
+/// * `p` - A mutable slice representing the polynomial coefficients in NTT domain.
+/// * `igmb` - A slice containing the precomputed Montgomery-form inverse twiddle factors.
+#[inline(always)]
+pub fn mq_intt(p: &mut [u16]) {
+    let mut t = 1;
+    let mut m = N;
+
+    while m != 1 {
+        let hm = m >> 1;
+        let dt = t << 1;
+        let mut j1 = 0;
+
+        for i in 0..hm {
+            let s = IGMB[(hm + i) as usize];
+            let j2 = j1 + t;
+
+            for j in j1..j2 {
+                let u = p[j as usize];
+                let v = p[(j + t) as usize];
+
+                p[j as usize] = mq_add(u, v);
+                p[(j + t) as usize] = mq_montymul(mq_sub(u, v), s);
+            }
+
+            j1 += dt
+        }
+
+        t = dt;
+        m = hm;
+    }
+
+    for val in p.iter_mut() {
+        // precomputed 9 loop of mq_shr1(N)
+        *val = mq_montymul(*val, 0x80);
+    }
+}
+
+/// Converts a polynomial's coefficients to Montgomery representation in-place.
+///
+/// This operation is required before performing NTT-based polynomial multiplication.
+/// It multiplies every coefficient of the polynomial `p` by `R^2 mod Q` using
+/// Montgomery multiplication.
+///
+/// # Arguments
+/// * `p` - A mutable slice representing the polynomial to be converted.
+#[inline(always)]
+pub fn mq_poly_tomonty(p: &mut [u16]) {
+    for c in p.iter_mut() {
+        *c = mq_montymul(*c, R2);
+    }
+}
+
+/// Performs pointwise multiplication of two polynomials in NTT form.
+///
+/// This function takes two polynomials, `f` and `g`, which are already in
+/// NTT and Montgomery representation, and computes their product `f[i] * g[i]`
+/// for all `i`. The result is written back over the `f` polynomial.
+///
+/// # Arguments
+/// * `f` - A mutable slice for the first polynomial, `f`. The result is stored here.
+/// * `g` - An immutable slice for the second polynomial, `g`.
+#[inline(always)]
+pub fn mq_poly_montymul_ntt(f: &mut [u16], g: &[u16]) {
+    // We zip the iterators of f and g. This is the most efficient and safe
+    // way to perform element-wise operations in Rust. The compiler will optimize
+    // this to a simple, tight loop with no bounds checks.
+    for (f_i, g_i) in f.iter_mut().zip(g.iter()) {
+        *f_i = mq_montymul(*f_i, *g_i);
+    }
+}
+
+/// sub polynomial g from polynomial f
+/// result f-g is written over f
+///
+/// # Arguments
+/// * `f` - A mutable slice for the first polynomial, `f`. The result is stored here.
+/// * `g` - An immutable slice for the second polynomial, `g`.
 pub fn mq_poly_sub(f: &mut [u16; 512], g: &[u16; 512]) {
     let mut i = 0;
     let end: usize = N as usize;
@@ -158,6 +343,18 @@ pub fn mq_poly_sub(f: &mut [u16; 512], g: &[u16; 512]) {
             break;
         }
     }
+}
+
+/// converts a pub key to NTT + Montgomery format
+///
+/// # Arguments
+/// * `pubkey` - A mutable slice of the Falcon public key. The result is stored here.
+#[inline(always)]
+pub fn to_ntt_monty(
+    pubkey: &mut [u16; 512]
+) {
+    mq_ntt(pubkey);
+    mq_poly_tomonty(pubkey);
 }
 
 pub fn distance(s1: &[u16; 512], s2: &[u16; 512]) -> u32 {
@@ -246,7 +443,7 @@ pub fn mq_decode(x: &mut [u16; 512], input: &[u8; 897], offset: usize) -> u16 {
 
 // from an in, an out and a max in len, returns the nb of bytes read from the buffer
 pub fn comp_decode(
-    input: &Vec<u8>
+    input: &[u8]
 ) -> ([u16; 512], usize) {
     let in_max = input.len();
     let mut out = [0u16; 512];
@@ -337,7 +534,7 @@ pub fn verify_raw(
     // computes -s1_ = s2_*h_ - c0_ mod ph_i mod q (in s1_[]).
 
     mq_ntt(s1);
-    mq_poly_ntt(s1, h);
+    mq_poly_montymul_ntt(s1, h);
     mq_intt(s1);
     mq_poly_sub(s1, c0);
 
@@ -379,15 +576,15 @@ pub fn pk_to_ntt_fmt(pk: &[u8; 897]) -> [u16; 512] {
 
     // pk_ntt_fmt now contains decoded public key
 
-    mq_ntt(&mut pk_ntt_fmt);
+    to_ntt_monty(&mut pk_ntt_fmt);
 
     pk_ntt_fmt
 }
 
 // verify that the given sig, msg and pub key matches
 pub fn verify(
-    nonce_msg: Vec<u8>,
-    sig: Vec<u8>,
+    nonce_msg: &[u8],
+    sig: &[u8],
     pk_ntt_fmt: &[u16; 512]
 ) -> bool {
     let sig_len = sig.len();
@@ -415,10 +612,9 @@ pub fn verify(
     let mut shake_ctx = [0u64; 26];
 
     shake_inject(&mut shake_ctx, &nonce_msg);
-
     shake_flip(&mut shake_ctx);
 
-    let extracted = shake_extract(&mut shake_ctx, M * 2);
+    let extracted = shake_extract(&mut shake_ctx, (M << 1) as usize);
 
     let mut tmp_buff = [0u16; 512];
     let mut hash_nonce_msg = [0u16; 512];

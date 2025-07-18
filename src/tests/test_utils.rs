@@ -1,4 +1,4 @@
-use crate::{constants::{M, N, NONCE_LEN, Q, SIG_COMP_MAXSIZE}, falcon512::{comp_decode, distance, mq_intt, mq_ntt, mq_poly_ntt, mq_poly_sub}, shake256::{hash_to_point_ct, shake_extract, shake_flip, shake_inject}};
+use crate::{constants::{M, N, NONCE_LEN, Q, SIG_COMP_MAXSIZE}, falcon512::{hash_to_point_ct, comp_decode, distance, mq_intt, mq_ntt, mq_poly_montymul_ntt, mq_poly_sub}, shake256::{shake_extract, shake_flip, shake_inject}};
 
 
 // internal signature verification
@@ -28,7 +28,7 @@ pub fn verify_distance_raw(
     // computes -s1_ = s2_*h_ - c0_ mod ph_i mod q (in s1_[]).
 
     mq_ntt(s1);
-    mq_poly_ntt(s1, h);
+    mq_poly_montymul_ntt(s1, h);
     mq_intt(s1);
     mq_poly_sub(s1, c0);
 
@@ -54,8 +54,8 @@ pub fn verify_distance_raw(
 
 // verify that the given sig, msg and pub key matches
 pub fn verify_distance(
-    nonce_msg: Vec<u8>,
-    sig: Vec<u8>,
+    nonce_msg: &[u8],
+    sig: &[u8],
     pk_ntt_fmt: &[u16; 512]
 ) -> u32 {
     let sig_len = sig.len();
@@ -83,10 +83,9 @@ pub fn verify_distance(
     let mut shake_ctx = [0u64; 26];
 
     shake_inject(&mut shake_ctx, &nonce_msg);
-
     shake_flip(&mut shake_ctx);
 
-    let extracted = shake_extract(&mut shake_ctx, M * 2);
+    let extracted = shake_extract(&mut shake_ctx, (M << 0x1) as usize);
 
     let mut tmp_buff = [0u16; 512];
     let mut hash_nonce_msg = [0u16; 512];

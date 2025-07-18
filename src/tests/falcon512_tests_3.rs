@@ -1,6 +1,6 @@
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use crate::{falcon512::pk_to_ntt_fmt, tests::test_utils::verify_distance};
 
 

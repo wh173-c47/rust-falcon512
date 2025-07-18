@@ -1,4 +1,5 @@
-use crate::{constants::{M, M16, M32, M8, N, N_ROUNDS, OVER_SAMPLING, SHAKE256_RATE, SHAKE_ROUND_CONSTANTS}, utils::{rol, swap_byte_pairs}};
+use crate::{constants::{N_ROUNDS, SHAKE256_RATE, SHAKE_ROUND_CONSTANTS}, utils::rol};
+use num::integer::div_rem;
 
 /// processes the provided shake256 state
 /// result is written over shake context
@@ -16,7 +17,7 @@ pub fn process_block(
     let mut j: u8 = 0;
 
     loop {
-        let  xor_0_1 = shake_ctx[1] ^ shake_ctx[6] ^ shake_ctx[11] ^ shake_ctx[16] ^ shake_ctx[21];
+        let xor_0_1 = shake_ctx[1] ^ shake_ctx[6] ^ shake_ctx[11] ^ shake_ctx[16] ^ shake_ctx[21];
         let xor_2_3 = shake_ctx[4] ^ shake_ctx[9] ^ shake_ctx[14] ^ shake_ctx[19] ^ shake_ctx[24];
         let xor_4_5 = shake_ctx[3] ^ shake_ctx[8] ^ shake_ctx[13] ^ shake_ctx[18] ^ shake_ctx[23];
         let xor_6_7  = shake_ctx[0] ^ shake_ctx[5] ^ shake_ctx[10] ^ shake_ctx[15] ^ shake_ctx[20];
@@ -424,68 +425,91 @@ pub fn process_block(
     shake_ctx[20] = !shake_ctx[20];
 }
 
+/// packs and swap chunks (LE)
+#[inline(always)]
+fn pack_and_swap_chunk(input: &[u8], offset: usize) -> u64 {
+    (input[offset]) as u64
+        | ((input[offset + 1] as u64) << 0x8)
+        | ((input[offset + 2] as u64) << 0x10)
+        | ((input[offset + 3] as u64) << 0x18)
+        | ((input[offset + 4] as u64) << 0x20)
+        | ((input[offset + 5] as u64) << 0x28)
+        | ((input[offset + 6] as u64) << 0x30)
+        | ((input[offset + 7] as u64) << 0x38)
+}
+
+/// absorbs one full 136-byte block into the Keccak state using direct field access.
+#[inline(always)]
+fn absorb_full_block(shake_ctx: &mut [u64; 26], input_block: &[u8]) {
+    shake_ctx[0] = shake_ctx[0] ^ pack_and_swap_chunk(input_block, 0x0);
+    shake_ctx[1] = shake_ctx[1] ^ pack_and_swap_chunk(input_block, 0x8);
+    shake_ctx[2] = shake_ctx[2] ^ pack_and_swap_chunk(input_block, 0x10);
+    shake_ctx[3] = shake_ctx[3] ^ pack_and_swap_chunk(input_block, 0x18);
+    shake_ctx[4] = shake_ctx[4] ^ pack_and_swap_chunk(input_block, 0x20);
+    shake_ctx[5] = shake_ctx[5] ^ pack_and_swap_chunk(input_block, 0x28);
+    shake_ctx[6] = shake_ctx[6] ^ pack_and_swap_chunk(input_block, 0x30);
+    shake_ctx[7] = shake_ctx[7] ^ pack_and_swap_chunk(input_block, 0x38);
+    shake_ctx[8] = shake_ctx[8] ^ pack_and_swap_chunk(input_block, 0x40);
+    shake_ctx[9] = shake_ctx[9] ^ pack_and_swap_chunk(input_block, 0x48);
+    shake_ctx[10] = shake_ctx[10] ^ pack_and_swap_chunk(input_block, 0x50);
+    shake_ctx[11] = shake_ctx[11] ^ pack_and_swap_chunk(input_block, 0x58);
+    shake_ctx[12] = shake_ctx[12] ^ pack_and_swap_chunk(input_block, 0x60);
+    shake_ctx[13] = shake_ctx[13] ^ pack_and_swap_chunk(input_block, 0x68);
+    shake_ctx[14] = shake_ctx[14] ^ pack_and_swap_chunk(input_block, 0x70);
+    shake_ctx[15] = shake_ctx[15] ^ pack_and_swap_chunk(input_block, 0x78);
+    shake_ctx[16] = shake_ctx[16] ^ pack_and_swap_chunk(input_block, 0x80);
+}
+
 /// inject bytes data into the shake context
 /// does not support consecutive calls
 pub fn shake_inject(
     shake_ctx: &mut [u64; 26],
-    input: &Vec<u8>
+    input: &[u8]
 ) {
     let mut in_len = input.len();
-    let mut o: usize = 7;
-    let rate = SHAKE256_RATE as usize;
+    let mut offset: usize = 0;
+    let rate_usize = SHAKE256_RATE as usize;
+    let full_runs = in_len / rate_usize;
+    let loop_end = full_runs * rate_usize;
 
-    while in_len >= rate {
-        let mut i: u8 = 0;
+    // processes full blocks using the fast, unrolled path
+    while offset != loop_end {
+        let next_block = offset + rate_usize;
+        let input_block = &input[offset..next_block];
 
-        loop  {
-            let mut packed: u64 = (input[o] as u64) |
-                ((input[o - 1] as u64) << 0x8) |
-                (input[o - 2] as u64) << 0x10 |
-                (input[o - 3] as u64) << 0x18 |
-                (input[o - 4] as u64) << 0x20 |
-                (input[o - 5] as u64) << 0x28 |
-                (input[o - 6] as u64) << 0x30 |
-                (input[o - 7] as u64) << 0x38;
-
-            packed = (packed >> 0x8 & M8) | (packed & M8) << 0x8;
-            packed = (packed >> 0x10 & M16) | (packed & M16) << 0x10;
-            packed = (packed >> 0x20 & M32) | (packed & M32) << 0x20;
-
-            let shake_o: usize = ((0x7 + i) >> 0x3) as usize;
-
-            shake_ctx[shake_o] = shake_ctx[shake_o] ^ packed;
-
-            i += 8;
-            o += 8;
-
-            if i == SHAKE256_RATE {
-                break;
-            }
-        };
-
-        in_len -= rate;
-
+        absorb_full_block(shake_ctx, input_block);
         process_block(shake_ctx);
+
+        offset = next_block;
     };
 
-    if in_len > 0 {
-        let msg_o = input.len() - in_len;
+    in_len -= loop_end;
+
+    if in_len != 0 {
+        // The remainder always starts filling the state from lane 0.
+        let (full_words_in_remainder, final_bytes) = div_rem(in_len, 8);
+
         let mut i = 0;
-
-        loop {
-            let o: usize = (i >> 0x3) as usize;
-
-            shake_ctx[o] ^= (input[msg_o + i] as u64) << (i << 0x3 & 0x3f);
-
+        while i != full_words_in_remainder {
+            // CORRECTED: The destination index is `i`, starting from 0.
+            let data_chunk = pack_and_swap_chunk(input, offset + i * 8);
+            shake_ctx[i] ^= data_chunk;
             i += 1;
+        };
 
-            if i == in_len {
-                break;
-            }
-        }
+        let remainder_offset = offset + (full_words_in_remainder * 8);
+
+        i = 0;
+        while i != final_bytes {
+            // CORRECTED: The destination index for the final bytes is the lane
+            // immediately after the last full word. This is `full_words_in_remainder`.
+            let lane_index = full_words_in_remainder;
+            shake_ctx[lane_index] ^= (input[remainder_offset + i] as u64) << (i * 8);
+            i += 1;
+        };
     }
 
-    shake_ctx[25] =  in_len as u64;
+    shake_ctx[25] = in_len as u64;
 }
 
 /// flips shake256 state to output mode
@@ -505,290 +529,47 @@ pub fn shake_flip(shake_ctx: &mut [u64; 26]) {
     shake_ctx[25] = SHAKE256_RATE as u64;
 }
 
+
 /// extracts bytes from shake256 context ("squeeze" op, 8 bytes chunks)
 /// context must have been flipped to output mode
 pub fn shake_extract(
     shake_ctx: &mut [u64; 26],
-    len: u16
+    len: usize,
 ) -> Vec<u64> {
-    let mut dptr: u16 = shake_ctx[25] as u16;
-    let mut out: Vec<u64> = vec![];
-    let mut out_len = len;
+    let out_capacity_words = (len + 7) / 8;
+    let mut out: Vec<u64> = Vec::with_capacity(out_capacity_words);
+    let rate_usize = SHAKE256_RATE as usize;
 
-    loop {
-        if dptr == SHAKE256_RATE as u16 {
-            process_block(shake_ctx);
+    let (full_runs, remainder_bytes) = div_rem(len, rate_usize);
 
-            dptr = 0;
+    for _ in 0..full_runs {
+        process_block(shake_ctx);
+        // squeeze full block
+        out.extend_from_slice(&shake_ctx[..17]);
+    }
+
+    if remainder_bytes > 0 {
+        process_block(shake_ctx);
+
+        let (remainder_words, partial_word_bytes) = div_rem(remainder_bytes, 8);
+
+        if remainder_words > 0 {
+            out.extend_from_slice(&shake_ctx[..remainder_words]);
         }
 
-        // below eq, benchmark it
-        let mut clen: u16 = (SHAKE256_RATE as u16) - dptr;
+        if partial_word_bytes > 0 {
+            let word_to_unpack = shake_ctx[remainder_words];
+            let mut packed = 0u64;
 
-        if clen > out_len {
-            clen = out_len;
-        }
-
-        // clen = min(out_len, clen);
-
-        // extracts bytes in chunks of 8 where possible
-        loop {
-            out.push(shake_ctx[(dptr as usize) >> 0x3]);
-
-            dptr += 8;
-            out_len -= 8;
-            clen -= 8;
-
-            if clen < 8 {
-                break;
+            for i in 0..partial_word_bytes {
+                packed |= ((word_to_unpack >> (i * 8)) & 0xFF) << (i * 8);
             }
-        };
-
-        // extract remaining bytes
-        if clen > 0 {
-            let mut packed = 0;
-            let mut i: u16 = 0;
-
-            loop {
-                packed = packed |
-                    ((shake_ctx[(dptr as usize) >> 0x3]) >> ((dptr & 7) << 0x3) & 0xff) << (i << 0x3);
-
-                dptr += 1;
-                i += 1;
-
-                if i == clen {
-                    break;
-                }
-            };
 
             out.push(packed);
-            out_len -= clen;
         }
+    }
 
-        if out_len == 0 {
-            break;
-        }
-    };
-
-    shake_ctx[25] = dptr as u64;
+    shake_ctx[25] = 0x0;
 
     out
-}
-
-// TODO: see below if no branching worth vs early exited branching
-#[inline(always)]
-fn handle_hash_to_point_bytes_pair(pair: u64) -> u16 {
-    let mut res: u16 = pair as u16;
-
-    if pair < 12289 {
-        return res;
-    }
-
-    if res < 61445 {
-        if res  < 24578 {
-            res -= 12289;
-
-            return res;
-        }
-
-        if res < 36867 {
-            res -= 24578;
-
-            return res;
-        }
-
-        if res < 49156 {
-            res -= 36867;
-
-            return res;
-        }
-
-        res -= 49156;
-
-        return res;
-    }
-
-    0xffff
-}
-
-
-#[inline(always)]
-pub fn handle_hash_to_point_chunk(
-    chunk: u64,
-    out: &mut [u16; 512],
-    index: usize
-) {
-    let swapped = swap_byte_pairs(chunk);
-
-    out[index] = handle_hash_to_point_bytes_pair(swapped & 0xffff);
-    out[index + 1] = handle_hash_to_point_bytes_pair(swapped >> 0x10 & 0xffff);
-    out[index + 2] = handle_hash_to_point_bytes_pair(swapped >> 0x20 & 0xffff);
-    out[index + 3] = handle_hash_to_point_bytes_pair(swapped >> 0x30);
-}
-
-// constant-time produces a new point from a flipped shake256 context
-// TODO: optimize further
-pub fn hash_to_point_ct(
-    extracted: &Vec<u64>,
-    x: &mut [u16; 512],
-    tt1: &mut [u16; 512]
-) {
-    let mut u = 0;
-
-    // handling `x` len 512, unrolled x32 => 16 runs
-    loop {
-        let index: usize = u << 0x2;
-
-        handle_hash_to_point_chunk(extracted[u], x, index);
-        handle_hash_to_point_chunk(extracted[u + 1], x, index + 0x4);
-        handle_hash_to_point_chunk(extracted[u + 2], x, index + 0x8);
-        handle_hash_to_point_chunk(extracted[u + 3], x, index + 0xc);
-        handle_hash_to_point_chunk(extracted[u + 4], x, index + 0x10);
-        handle_hash_to_point_chunk(extracted[u + 5], x, index + 0x14);
-        handle_hash_to_point_chunk(extracted[u + 6], x, index + 0x18);
-        handle_hash_to_point_chunk(extracted[u + 7], x, index + 0x1c);
-
-        u += 8;
-
-        if u == 0x80 {
-            break;
-        }
-    };
-
-    let mut out_index = 0;
-
-    // handling `tt1` OVERSAMPLING - 13 unrolled x32 => 6 runs
-    loop {
-        handle_hash_to_point_chunk(extracted[u], tt1, out_index);
-        handle_hash_to_point_chunk(extracted[u + 1], tt1, out_index + 0x4);
-        handle_hash_to_point_chunk(extracted[u + 2], tt1, out_index + 0x8);
-        handle_hash_to_point_chunk(extracted[u + 3], tt1, out_index + 0xc);
-        handle_hash_to_point_chunk(extracted[u + 4], tt1, out_index + 0x10);
-        handle_hash_to_point_chunk(extracted[u + 5], tt1, out_index + 0x14);
-        handle_hash_to_point_chunk(extracted[u + 6], tt1, out_index + 0x18);
-        handle_hash_to_point_chunk(extracted[u + 7], tt1, out_index + 0x1c);
-
-        u += 8;
-        out_index += 32;
-
-        if u == 0xb0 {
-            break;
-        }
-    };
-
-    // handles remaining 13 items
-    handle_hash_to_point_chunk(extracted[0xb0], tt1, out_index);
-    handle_hash_to_point_chunk(extracted[0xb1], tt1, out_index + 0x4);
-    handle_hash_to_point_chunk(extracted[0xb2], tt1, out_index + 0x8);
-
-    let swapped = swap_byte_pairs(extracted[0xb3]);
-
-    tt1[out_index + 0xc] = handle_hash_to_point_bytes_pair(swapped & 0xffff);
-
-    let mut p = 1;
-
-    loop {
-        let mut v: u16 = 0;
-        let mut u: usize = 0;
-
-        // skip first round if u < p
-        loop {
-            // Update v (unsigned arithmetic, subtract mk)
-            v -= (x[u] >> 0xf) - 1;
-            u += 1;
-
-            if u == p {
-                break;
-            }
-        };
-
-        // first loop for `u < _N`
-        loop {
-            let sv: u16 = x[u];
-            let j = u as u16 - v;
-            // mk = (sv >> 15) - 1 (but we work in uint256 now)
-            // mk is 0xFFFFFFFFFFFFFFFF... for negative condition
-            let mut mk = (sv >> 0xf) - 1;
-
-            // Update v (unsigned arithmetic, subtract mk)
-            v -= mk;
-
-            // Adjust mk with new condition (same shift as before but in uint256)
-            mk &= 0 - (((j & p as u16) + 0x1ff) >> 0x9);
-
-            let xi = u - p;
-            let dv = x[xi];
-            let mk_and_sv_xor_dv = mk & (sv ^ dv);
-
-            x[xi] = dv ^ mk_and_sv_xor_dv;
-            x[u] = sv ^ mk_and_sv_xor_dv;
-
-            u += 1;
-
-            if u == N as usize {
-                break;
-            }
-        };
-
-        // sec loop for `u >= _M || (u - p) >= _N`
-
-        loop {
-            let tt1i = u - N as usize;
-            let sv = tt1[tt1i];
-            let j = u as u16 - v;
-            let mut mk = (sv >> 0xf) - 1;
-
-            v -= mk;
-
-            mk &= 0 - (((j & p as u16) + 0x1ff) >> 0x9);
-
-            let xi = u - p;
-            let dv = x[xi];
-            let mk_and_sv_xor_dv = mk & (sv ^ dv);
-
-            x[xi] = dv ^ mk_and_sv_xor_dv;
-            tt1[tt1i] = sv ^ mk_and_sv_xor_dv;
-
-            u += 1;
-
-            if u < M as usize && (u - p) < N as usize {
-                continue;
-            }
-
-            break;
-        };
-
-        // sec loop for `u < _M`
-        loop {
-            let u_sub_n = u - N as usize;
-            let sv = tt1[u_sub_n];
-            let j = u as u16 - v;
-            let mut mk = (sv >> 0xf) - 1;
-
-            v = v - mk;
-
-            mk &= 0 - (((j & p as u16) + 0x1ff) >> 0x9);
-
-            let dvi = u_sub_n - p;
-            let dv = tt1[dvi];
-            let mk_and_sv_xor_dv = mk & (sv ^ dv);
-
-            tt1[dvi] = dv ^ mk_and_sv_xor_dv;
-            tt1[u_sub_n] = sv ^ mk_and_sv_xor_dv;
-
-            u += 1;
-
-            if u == M as usize {
-                break;
-            }
-        };
-
-        p = p << 0x1;
-
-        if p < OVER_SAMPLING as usize {
-            continue;
-        };
-
-        break;
-    };
 }

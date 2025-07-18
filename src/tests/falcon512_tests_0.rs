@@ -1,8 +1,7 @@
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use crate::{falcon512::pk_to_ntt_fmt, tests::test_utils::verify_distance};
-
 
     #[test]
     pub fn nist_test_verify_0() {
@@ -14,7 +13,6 @@ mod tests {
         let res = verify_distance(nonce_msg, sig, &pk_ntt_fmt);
         assert_eq!(res, 28308410);
     }
-
 
     #[test]
     pub fn nist_test_verify_1() {

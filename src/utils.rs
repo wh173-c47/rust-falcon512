@@ -6,7 +6,7 @@ pub fn mq_montymul(a: u16, b: u16) -> u16 {
     let m = res as u16 * Q0I;
     let t = (res + (m as u32) * Q as u32) >> 16;
 
-    if t < Q as u32 { // <-- Potential branch
+    if t < Q as u32 {
         t as u16
     } else {
         (t - Q as u32) as u16
@@ -16,22 +16,15 @@ pub fn mq_montymul(a: u16, b: u16) -> u16 {
 /// Performs modular addition: `(a + b) mod Q`.
 #[inline(always)]
 pub fn mq_add(a: u16, b: u16) -> u16 {
-    let c = a as u32 + b as u32;
-
-    (c - if c >= Q as u32 { Q as u32} else { 0 }) as u16
+    ((a as u32 + b as u32) % Q as u32) as u16
 }
 
 /// Performs modular subtraction: `(a - b) mod Q`.
 #[inline(always)]
 pub fn mq_sub(a: u16, b: u16) -> u16 {
-    let c = (a as i32) - (b as i32);
+    let c = a - b;
 
-    (c + if c < 0 { Q as i32 } else { 0 }) as u16
-}
-
-#[inline(always)]
-pub fn rol(r: u64, x: u64) -> u64 {
-    (x << r) | (x >> (64 - r))
+    (c + if c > a { Q } else { 0 }) as u16
 }
 
 /// swaps byte pairs u64 wide `x`

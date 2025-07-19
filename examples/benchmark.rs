@@ -32,7 +32,7 @@ pub fn nist_test_verify_99() {
     };
 }
 
-// A struct to hold all the metrics we gather.
+// struct to hold all the metrics we gather.
 #[derive(Debug, Default)]
 struct BenchMetrics {
     total_duration_ns: u128,
@@ -40,14 +40,13 @@ struct BenchMetrics {
     peak_memory_bytes: usize,
 }
 
-/// A generic benchmarking function that takes any function closure.
+/// generic benchmarking function that takes any function closure.
 fn benchmark<F>(name: &str, runs: u32, mut op: F)
 where
     F: FnMut(),
 {
     let mut metrics = BenchMetrics::default();
 
-    // Warm-up run
     op();
 
     #[cfg(feature = "bench")]
@@ -61,7 +60,7 @@ where
 
         #[cfg(feature = "bench")]
         {
-            e.advance().unwrap(); // refresh jemalloc stats
+            e.advance().unwrap();
         }
 
         let start_time = Instant::now();
@@ -80,7 +79,6 @@ where
 
         #[cfg(feature = "bench")]
         {
-            // Count any new allocations that occurred during the op
             let peak_res = resident.read().unwrap_or(0);
             metrics.peak_memory_bytes = metrics.peak_memory_bytes.max(peak_res);
         }

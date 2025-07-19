@@ -1,4 +1,4 @@
-use crate::{constants::{SHAKE256_RATE, SHAKE_ROUND_CONSTANTS}};
+use crate::{constants::{SHAKE256_RATE, SHAKE_ROUND_CONSTANTS, SHAKE_EXTRACT_OUT_CAPACITY_WORDS}};
 
 #[inline(always)]
 fn theta_rho_step_1(shake_ctx: &mut [u64; 26]) {
@@ -372,18 +372,15 @@ pub fn shake_flip(shake_ctx: &mut [u64; 26]) {
     shake_ctx[25] = SHAKE256_RATE as u64;
 }
 
-// (shake_extract_len + 7) / 8
-const OUT_CAPACITY_WORDS: usize = 180;
-
 /// extracts bytes from shake256 context ("squeeze" op, 8 bytes chunks)
 /// context must have been flipped to output mode
 pub fn shake_extract(
     shake_ctx: &mut [u64; 26]
-) -> [u64; OUT_CAPACITY_WORDS] {
+) -> [u64; SHAKE_EXTRACT_OUT_CAPACITY_WORDS] {
     // M << 1
     let len = 1434;
 
-    let mut out = [0u64; OUT_CAPACITY_WORDS];
+    let mut out = [0u64; SHAKE_EXTRACT_OUT_CAPACITY_WORDS];
     let mut words_written = 0;
 
     let rate_usize = SHAKE256_RATE as usize;

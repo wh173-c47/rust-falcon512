@@ -6,7 +6,7 @@ pub const R_M8: u64 = 0xFF00FF00FF00FF00;
 
 pub const LOGN: u8 = 9;
 
-pub const N: u16 = 512;
+pub const N: usize = 512;
 
 // this format produces the most compact signatures on average, but the signature size may vary depending on internal key, signed data, and random seed.
 pub const SIG_COMP: u8 = 1;
@@ -16,7 +16,7 @@ pub const SHAKE256_RATE: u8 = 136;
 
 pub const N_ROUNDS: u8 = 24;
 
-pub const FALCON_PK_SIZE: u16 = 897;
+pub const FALCON_PK_SIZE: usize = 897;
 
 pub const NONCE_LEN: u8 = 40;
 
@@ -37,7 +37,7 @@ pub const M: u16 = 717;
 // R = 2^16 mod q
 // R2 = 2^32 mod q
 // N_INV = 1/_N mod q
-pub const Q: u16 = 12289; // [4*4=16 bytes]
+pub const Q: u16 = 12289;
 pub const Q0I: u16 = 12287;
 pub const R: u16 = 4091;
 pub const R2: u16 = 10952;
@@ -58,6 +58,9 @@ pub const IGMB: [u16; 512] = [4091, 4401, 1081, 1229, 2530, 6014, 7947, 5329, 25
 
 // shake256 round pub constants
 pub const SHAKE_ROUND_CONSTANTS: [u64; 24] = [0x0000000000000001, 0x0000000000008082, 0x800000000000808a, 0x8000000080008000, 0x000000000000808b, 0x0000000080000001, 0x8000000080008081, 0x8000000000008009, 0x000000000000008a, 0x0000000000000088, 0x0000000080008009, 0x000000008000000a, 0x000000008000808b, 0x800000000000008b, 0x8000000000008089, 0x8000000000008003, 0x8000000000008002, 0x8000000000000080, 0x000000000000800a, 0x800000008000000a, 0x8000000080008081, 0x8000000000008080, 0x0000000080000001, 0x8000000080008008];
+
+// (shake_extract_len + 7) / 8
+pub const SHAKE_EXTRACT_OUT_CAPACITY_WORDS: usize = 180;
 
 pub mod errors {
     pub const E_INVALID_PUBLIC_KEY: &str = "INVALID PK";

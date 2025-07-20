@@ -1,20 +1,10 @@
 use crate::{
     constants::{
-        errors::E_INVALID_PUBLIC_KEY,
-        FALCON_PK_SIZE,
-        OVER_SAMPLING,
-        GMB,
-        IGMB,
-        LOGN,
-        M,
-        N,
-        NONCE_LEN,
-        Q,
-        R2,
-        SIG_COMP_MAXSIZE
+        errors::E_INVALID_PUBLIC_KEY, FALCON_PK_SIZE, GMB, IGMB, LOGN, M, N, NONCE_LEN,
+        OVER_SAMPLING, Q, R2, SIG_COMP_MAXSIZE,
     },
-    shake256::{shake_inject, shake_flip, shake_extract },
-    utils::{mq_add, mq_sub, mq_montymul, revert, sign_extend_u16_to_u32, swap_byte_pairs}
+    shake256::{shake_extract, shake_flip, shake_inject},
+    utils::{mq_add, mq_montymul, mq_sub, revert, sign_extend_u16_to_u32, swap_byte_pairs},
 };
 
 // TODO: see below if no branching worth vs early exited branching
@@ -28,19 +18,15 @@ fn handle_hash_to_point_bytes_pair(pair: u64) -> u16 {
     (r | ((pair - 61445) >> 63) - 1) as u16
 }
 
-
 // constant-time produces a new point from a flipped shake256 context
 // TODO: optimize further
 #[inline(always)]
-pub fn hash_to_point_ct(
-    extracted: &[u64],
-    x: &mut [u16; N],
-    tt1: &mut [u16; N]
-) {
+pub fn hash_to_point_ct(extracted: &[u64], x: &mut [u16; N], tt1: &mut [u16; N]) {
+    let x_ptr = x.as_mut_ptr();
+    let tt1_ptr = tt1.as_mut_ptr();
+
     unsafe {
         let ex_ptr = extracted.as_ptr();
-        let x_ptr = x.as_mut_ptr();
-        let t_ptr = tt1.as_mut_ptr();
         let mut u = 0usize;
 
         while u != 0x80 {
@@ -63,7 +49,7 @@ pub fn hash_to_point_ct(
         while u != 0xB3 {
             let raw = *ex_ptr.add(u);
             let swapped = swap_byte_pairs(raw);
-            let dest = t_ptr.add(out_base);
+            let dest = tt1_ptr.add(out_base);
 
             *dest.add(0) = handle_hash_to_point_bytes_pair(swapped & 0xffff);
             *dest.add(1) = handle_hash_to_point_bytes_pair((swapped >> 0x10) & 0xffff);
@@ -78,7 +64,7 @@ pub fn hash_to_point_ct(
         let swapped = swap_byte_pairs(raw) & 0xFFFF;
         let lane = swapped as u64;
 
-        *t_ptr.add(out_base + 0xC) = handle_hash_to_point_bytes_pair(lane);
+        *tt1_ptr.add(out_base + 0xC) = handle_hash_to_point_bytes_pair(lane);
     }
 
     let mut p = 1;
@@ -87,106 +73,110 @@ pub fn hash_to_point_ct(
         let mut v: u16 = 0;
         let mut u: usize = 0;
 
-        // skip first round if u < p
-        loop {
-            // Update v (unsigned arithmetic, subtract mk)
-            v -= (x[u] >> 0xf) - 1;
-            u += 1;
+        unsafe {
+            // skip first round if u < p
+            loop {
+                // Update v (unsigned arithmetic, subtract mk)
+                v -= (*x_ptr.add(u) >> 0xf) - 1;
+                u += 1;
 
-            if u == p {
+                if u == p {
+                    break;
+                }
+            }
+
+            // first loop for `u < _N`
+            loop {
+                let sv: u16 = *x_ptr.add(u);
+                let j = u as u16 - v;
+                // mk = (sv >> 15) - 1 (but we work in uint256 now)
+                // mk is 0xFFFFFFFFFFFFFFFF... for negative condition
+                let mut mk = (sv >> 0xf) - 1;
+
+                // update v (unsigned arithmetic, subtract mk)
+                v -= mk;
+
+                // adjust mk with new condition (same shift as before but in uint256)
+                mk &= 0 - (((j & p as u16) + 0x1ff) >> 0x9);
+
+                let xi = u - p;
+                let dv = *x_ptr.add(xi);
+                let mk_and_sv_xor_dv = mk & (sv ^ dv);
+
+                *x_ptr.add(xi) = dv ^ mk_and_sv_xor_dv;
+                *x_ptr.add(u) = sv ^ mk_and_sv_xor_dv;
+
+                u += 1;
+
+                if u == N {
+                    break;
+                }
+            }
+
+            // sec loop for `u >= _M || (u - p) >= _N`
+            loop {
+                let tt1i = u - N;
+                let sv = *tt1_ptr.add(tt1i);
+                let j = u as u16 - v;
+                let mut mk = (sv >> 0xf) - 1;
+
+                v -= mk;
+
+                mk &= 0 - (((j & p as u16) + 0x1ff) >> 0x9);
+
+                let xi = u - p;
+                let dv = *x_ptr.add(xi);
+                let mk_and_sv_xor_dv = mk & (sv ^ dv);
+
+                *x_ptr.add(xi) = dv ^ mk_and_sv_xor_dv;
+                *tt1_ptr.add(tt1i) = sv ^ mk_and_sv_xor_dv;
+
+                u += 1;
+
+                if u < M as usize && (u - p) < N {
+                    continue;
+                }
+
                 break;
             }
-        };
 
-        // first loop for `u < _N`
-        loop {
-            let sv: u16 = x[u];
-            let j = u as u16 - v;
-            // mk = (sv >> 15) - 1 (but we work in uint256 now)
-            // mk is 0xFFFFFFFFFFFFFFFF... for negative condition
-            let mut mk = (sv >> 0xf) - 1;
+            let next_p = p << 0x1;
+            let next_p_lt_oversampling = next_p < OVER_SAMPLING as usize;
 
-            // update v (unsigned arithmetic, subtract mk)
-            v -= mk;
+            if next_p_lt_oversampling {
+                // sec loop for `u < _M`
+                loop {
+                    let u_sub_n = u - N;
+                    let sv = *tt1_ptr.add(u_sub_n);
+                    let j = u as u16 - v;
+                    let mut mk = (sv >> 0xf) - 1;
 
-            // adjust mk with new condition (same shift as before but in uint256)
-            mk &= 0 - (((j & p as u16) + 0x1ff) >> 0x9);
+                    v = v - mk;
 
-            let xi = u - p;
-            let dv = x[xi];
-            let mk_and_sv_xor_dv = mk & (sv ^ dv);
+                    mk &= 0 - (((j & p as u16) + 0x1ff) >> 0x9);
 
-            x[xi] = dv ^ mk_and_sv_xor_dv;
-            x[u] = sv ^ mk_and_sv_xor_dv;
+                    let dvi = u_sub_n - p;
+                    let dv = *tt1_ptr.add(dvi);
+                    let mk_and_sv_xor_dv = mk & (sv ^ dv);
 
-            u += 1;
+                    *tt1_ptr.add(dvi) = dv ^ mk_and_sv_xor_dv;
+                    *tt1_ptr.add(u_sub_n) = sv ^ mk_and_sv_xor_dv;
 
-            if u == N {
-                break;
-            }
-        };
+                    u += 1;
 
-        // sec loop for `u >= _M || (u - p) >= _N`
+                    if u == M as usize {
+                        break;
+                    }
+                }
 
-        loop {
-            let tt1i = u - N;
-            let sv = tt1[tt1i];
-            let j = u as u16 - v;
-            let mut mk = (sv >> 0xf) - 1;
+                p = next_p;
 
-            v -= mk;
-
-            mk &= 0 - (((j & p as u16) + 0x1ff) >> 0x9);
-
-            let xi = u - p;
-            let dv = x[xi];
-            let mk_and_sv_xor_dv = mk & (sv ^ dv);
-
-            x[xi] = dv ^ mk_and_sv_xor_dv;
-            tt1[tt1i] = sv ^ mk_and_sv_xor_dv;
-
-            u += 1;
-
-            if u < M as usize && (u - p) < N {
                 continue;
             }
 
             break;
-        };
-
-        // sec loop for `u < _M`
-        loop {
-            let u_sub_n = u - N;
-            let sv = tt1[u_sub_n];
-            let j = u as u16 - v;
-            let mut mk = (sv >> 0xf) - 1;
-
-            v = v - mk;
-
-            mk &= 0 - (((j & p as u16) + 0x1ff) >> 0x9);
-
-            let dvi = u_sub_n - p;
-            let dv = tt1[dvi];
-            let mk_and_sv_xor_dv = mk & (sv ^ dv);
-
-            tt1[dvi] = dv ^ mk_and_sv_xor_dv;
-            tt1[u_sub_n] = sv ^ mk_and_sv_xor_dv;
-
-            u += 1;
-
-            if u == M as usize {
-                break;
-            }
-        };
-
-        p = p << 0x1;
-
-        if p < OVER_SAMPLING as usize {
-            continue;
-        };
-
-        break;
-    };
+        }
+    }
 }
 
 /// Computes the Number Theoretic Transform (NTT) on a polynomial in-place.
@@ -211,7 +201,7 @@ pub fn mq_ntt(p: &mut [u16; N]) {
 
             for block_idx in 0..step {
                 let s = GMB[step + block_idx];
-                let mut low_idx  = base;
+                let mut low_idx = base;
                 let mut high_idx = base + half;
 
                 for _ in 0..half {
@@ -221,7 +211,7 @@ pub fn mq_ntt(p: &mut [u16; N]) {
                     *ptr.add(low_idx) = mq_add(u, v);
                     *ptr.add(high_idx) = mq_sub(u, v);
 
-                    low_idx  += 1;
+                    low_idx += 1;
                     high_idx += 1;
                 }
 
@@ -245,7 +235,7 @@ pub fn mq_intt(p: &mut [u16; N]) {
 
     while blocks > 1 {
         let half_blocks = blocks >> 1;
-        let block_size  = step << 1;
+        let block_size = step << 1;
 
         for (blk_idx, chunk) in p.chunks_exact_mut(block_size).enumerate() {
             let s = IGMB[half_blocks + blk_idx];
@@ -255,7 +245,7 @@ pub fn mq_intt(p: &mut [u16; N]) {
                 let u = low[j];
                 let v = high[j];
 
-                low[j]  = mq_add(u, v);
+                low[j] = mq_add(u, v);
                 high[j] = mq_montymul(mq_sub(u, v), s);
             }
         }
@@ -333,9 +323,7 @@ pub fn mq_poly_sub(f: &mut [u16; N], g: &[u16; N]) {
 /// # Arguments
 /// * `pubkey` - A mutable slice of the Falcon public key. The result is stored here.
 #[inline(always)]
-pub fn to_ntt_monty(
-    pubkey: &mut [u16; N]
-) {
+pub fn to_ntt_monty(pubkey: &mut [u16; N]) {
     mq_ntt(pubkey);
     mq_poly_tomonty(pubkey);
 }
@@ -411,7 +399,7 @@ pub fn mq_decode(x: &mut [u16; N], input: &[u8; FALCON_PK_SIZE], offset: usize) 
         ret = 0;
 
         break;
-    };
+    }
 
     if (acc & (1 << acc_len) - 1) != 0 {
         ret = 0;
@@ -421,9 +409,7 @@ pub fn mq_decode(x: &mut [u16; N], input: &[u8; FALCON_PK_SIZE], offset: usize) 
 }
 
 // from an in, an out and a max in len, returns the nb of bytes read from the buffer
-pub fn comp_decode(
-    input: &[u8]
-) -> ([u16; N], usize) {
+pub fn comp_decode(input: &[u8]) -> ([u16; N], usize) {
     let in_max = input.len();
     let mut out = [0u16; N];
     let mut v = 0;
@@ -493,12 +479,7 @@ pub fn comp_decode(
 
 // internal signature verification
 // returns true if valid else false
-pub fn verify_raw(
-    c0: &mut[u16; N],
-    s2: &[u16; N],
-    h: &[u16; N],
-    s1: &mut [u16; N]
-) -> bool {
+pub fn verify_raw(c0: &mut [u16; N], s2: &[u16; N], h: &[u16; N], s1: &mut [u16; N]) -> bool {
     // reduce s2_ elements modulo q ([0..q-1] range).
     unsafe {
         let s1_ptr = s1.as_mut_ptr();
@@ -523,7 +504,7 @@ pub fn verify_raw(
         let s1_ptr = s1.as_mut_ptr();
 
         for i in 0..N {
-            *s1_ptr.add(i) = *s1_ptr.add(i) - (Q & (0 - ((q_shr_1 - *s1_ptr.add(i) >> 0xf))));
+            *s1_ptr.add(i) = *s1_ptr.add(i) - (Q & (0 - (q_shr_1 - *s1_ptr.add(i) >> 0xf)));
         }
     }
 
@@ -554,20 +535,12 @@ pub fn pk_to_ntt_fmt(pk: &[u8; FALCON_PK_SIZE]) -> [u16; N] {
 }
 
 // verify that the given sig, msg and pub key matches
-pub fn verify(
-    nonce_msg: &[u8],
-    sig: &[u8],
-    pk_ntt_fmt: &[u16; N]
-) -> bool {
+pub fn verify(nonce_msg: &[u8], sig: &[u8], pk_ntt_fmt: &[u16; N]) -> bool {
     let sig_len = sig.len();
 
     // sig must have a minimum length of 42 bytes
     // sig type must have the correct sig length in the pub key
-    if
-        sig_len < 1 ||
-        sig_len  > SIG_COMP_MAXSIZE as usize ||
-        nonce_msg.len() == NONCE_LEN as usize
-    {
+    if sig_len < 1 || sig_len > SIG_COMP_MAXSIZE as usize || nonce_msg.len() == NONCE_LEN as usize {
         return false;
     }
 
@@ -593,10 +566,5 @@ pub fn verify(
 
     hash_to_point_ct(&extracted, &mut hash_nonce_msg, &mut tmp_buff);
 
-    verify_raw(
-        &mut hash_nonce_msg,
-        &decoded_sig,
-        pk_ntt_fmt,
-        &mut tmp_buff
-    )
+    verify_raw(&mut hash_nonce_msg, &decoded_sig, pk_ntt_fmt, &mut tmp_buff)
 }

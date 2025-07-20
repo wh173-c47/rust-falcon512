@@ -1,4 +1,4 @@
-use crate::constants::{M8, R_M8, Q, Q0I, };
+use crate::constants::{M8, Q, Q0I, R_M8};
 
 #[inline(always)]
 pub fn mq_montymul(a: u16, b: u16) -> u16 {

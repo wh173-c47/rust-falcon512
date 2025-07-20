@@ -1,4 +1,3 @@
-pub mod test_utils;
 pub mod falcon512_tests_0;
 pub mod falcon512_tests_1;
 pub mod falcon512_tests_2;
@@ -9,3 +8,4 @@ pub mod falcon512_tests_6;
 pub mod falcon512_tests_7;
 pub mod falcon512_tests_8;
 pub mod falcon512_tests_9;
+pub mod test_utils;

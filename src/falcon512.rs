@@ -28,84 +28,58 @@ fn handle_hash_to_point_bytes_pair(pair: u64) -> u16 {
     (r | ((pair - 61445) >> 63) - 1) as u16
 }
 
-#[inline(always)]
-pub fn handle_hash_to_point_chunk(
-    chunk: u64,
-    out: &mut [u16; N],
-    index: usize
-) {
-    let swapped = swap_byte_pairs(chunk);
-
-    out[index] = handle_hash_to_point_bytes_pair(swapped & 0xffff);
-    out[index + 1] = handle_hash_to_point_bytes_pair(swapped >> 0x10 & 0xffff);
-    out[index + 2] = handle_hash_to_point_bytes_pair(swapped >> 0x20 & 0xffff);
-    out[index + 3] = handle_hash_to_point_bytes_pair(swapped >> 0x30);
-}
 
 // constant-time produces a new point from a flipped shake256 context
 // TODO: optimize further
+#[inline(always)]
 pub fn hash_to_point_ct(
     extracted: &[u64],
     x: &mut [u16; N],
     tt1: &mut [u16; N]
 ) {
-    let mut u = 0;
-
-    // handling `x` len 512, unrolled x32 => 16 runs
-    loop {
-        let index: usize = u << 0x2;
-
-        unsafe {
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u), x, index);
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 1), x, index + 0x4);
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 2), x, index + 0x8);
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 3), x, index + 0xc);
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 4), x, index + 0x10);
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 5), x, index + 0x14);
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 6), x, index + 0x18);
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 7), x, index + 0x1c);
-        }
-
-        u += 8;
-
-        if u == 0x80 {
-            break;
-        }
-    };
-
-    let mut out_index = 0;
-
-    // handling `tt1` OVERSAMPLING - 13 unrolled x32 => 6 runs
-    loop {
-        unsafe {
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u), tt1, out_index);
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 1), tt1, out_index + 0x4);
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 2), tt1, out_index + 0x8);
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 3), tt1, out_index + 0xc);
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 4), tt1, out_index + 0x10);
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 5), tt1, out_index + 0x14);
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 6), tt1, out_index + 0x18);
-            handle_hash_to_point_chunk(*extracted.get_unchecked(u + 7), tt1, out_index + 0x1c);
-        }
-
-        u += 8;
-        out_index += 0x20;
-
-        if u == 0xb0 {
-            break;
-        }
-    };
-
     unsafe {
-        // handles remaining 13 items
-        handle_hash_to_point_chunk(*extracted.get_unchecked(0xb0), tt1, out_index);
-        handle_hash_to_point_chunk(*extracted.get_unchecked(0xb1), tt1, out_index + 0x4);
-        handle_hash_to_point_chunk(*extracted.get_unchecked(0xb2), tt1, out_index + 0x8);
+        let ex_ptr = extracted.as_ptr();
+        let x_ptr = x.as_mut_ptr();
+        let t_ptr = tt1.as_mut_ptr();
+        let mut u = 0usize;
+
+        while u != 0x80 {
+            let raw = *ex_ptr.add(u);
+            let swapped = swap_byte_pairs(raw);
+
+            let base = u << 2;
+            let dest = x_ptr.add(base);
+
+            *dest.add(0) = handle_hash_to_point_bytes_pair(swapped & 0xffff);
+            *dest.add(1) = handle_hash_to_point_bytes_pair((swapped >> 0x10) & 0xffff);
+            *dest.add(2) = handle_hash_to_point_bytes_pair((swapped >> 0x20) & 0xffff);
+            *dest.add(3) = handle_hash_to_point_bytes_pair(swapped >> 0x30);
+
+            u += 1;
+        }
+
+        let mut out_base = 0usize;
+
+        while u != 0xB3 {
+            let raw = *ex_ptr.add(u);
+            let swapped = swap_byte_pairs(raw);
+            let dest = t_ptr.add(out_base);
+
+            *dest.add(0) = handle_hash_to_point_bytes_pair(swapped & 0xffff);
+            *dest.add(1) = handle_hash_to_point_bytes_pair((swapped >> 0x10) & 0xffff);
+            *dest.add(2) = handle_hash_to_point_bytes_pair((swapped >> 0x20) & 0xffff);
+            *dest.add(3) = handle_hash_to_point_bytes_pair(swapped >> 0x30);
+
+            u += 1;
+            out_base += 4;
+        }
+
+        let raw = *ex_ptr.add(0xB3);
+        let swapped = swap_byte_pairs(raw) & 0xFFFF;
+        let lane = swapped as u64;
+
+        *t_ptr.add(out_base + 0xC) = handle_hash_to_point_bytes_pair(lane);
     }
-
-    let swapped = swap_byte_pairs(extracted[0xb3]);
-
-    tt1[out_index + 0xc] = handle_hash_to_point_bytes_pair(swapped & 0xffff);
 
     let mut p = 1;
 
@@ -224,31 +198,39 @@ pub fn hash_to_point_ct(
 /// * `p` - A mutable slice representing the polynomial coefficients.
 #[inline(always)]
 pub fn mq_ntt(p: &mut [u16; N]) {
-    let mut t = N;
-    let mut m = 1;
+    let mut len = N;
+    let mut step = 1;
 
-    while m != N {
-        let ht = t >> 1;
-        let mut j1 = 0;
+    unsafe {
+        let ptr = p.as_mut_ptr();
 
-        for i in 0..m {
-            let s = GMB[m + i];
-            let j2 = j1 + ht;
+        while step != N {
+            let half = len >> 1;
+            let block_size = len;
+            let mut base = 0usize;
 
-            for j in j1..j2 {
-                let u = p[j];
-                let jht = j + ht;
-                let v = mq_montymul(p[jht], s);
+            for block_idx in 0..step {
+                let s = GMB[step + block_idx];
+                let mut low_idx  = base;
+                let mut high_idx = base + half;
 
-                p[j] = mq_add(u, v);
-                p[jht] = mq_sub(u, v);
+                for _ in 0..half {
+                    let u = *ptr.add(low_idx);
+                    let v = mq_montymul(*ptr.add(high_idx), s);
+
+                    *ptr.add(low_idx) = mq_add(u, v);
+                    *ptr.add(high_idx) = mq_sub(u, v);
+
+                    low_idx  += 1;
+                    high_idx += 1;
+                }
+
+                base += block_size;
             }
 
-            j1 += t;
+            len = half;
+            step <<= 1;
         }
-
-        t = ht;
-        m = m << 1;
     }
 }
 
@@ -258,38 +240,34 @@ pub fn mq_ntt(p: &mut [u16; N]) {
 /// * `p` - A mutable slice representing the polynomial coefficients in NTT domain.
 #[inline(always)]
 pub fn mq_intt(p: &mut [u16; N]) {
-    let mut t = 1;
-    let mut m = N;
+    let mut step = 1;
+    let mut blocks = N;
 
-    while m != 1 {
-        let hm = m >> 1;
-        let dt = t << 1;
-        let mut j1 = 0;
+    while blocks > 1 {
+        let half_blocks = blocks >> 1;
+        let block_size  = step << 1;
 
-        for i in 0..hm {
-            let s = IGMB[hm + i];
-            let j2 = j1 + t;
+        for (blk_idx, chunk) in p.chunks_exact_mut(block_size).enumerate() {
+            let s = IGMB[half_blocks + blk_idx];
+            let (low, high) = chunk.split_at_mut(step);
 
-            for j in j1..j2 {
-                let u = p[j];
-                let jht = j + t;
-                let v = p[jht];
+            for j in 0..step {
+                let u = low[j];
+                let v = high[j];
 
-                p[j] = mq_add(u, v);
-                p[jht] = mq_montymul(mq_sub(u, v), s);
+                low[j]  = mq_add(u, v);
+                high[j] = mq_montymul(mq_sub(u, v), s);
             }
-
-            j1 += dt
         }
 
-        t = dt;
-        m = hm;
+        step = block_size;
+        blocks = half_blocks;
     }
 
-    for val in p.iter_mut() {
-        // precomputed 9 loop of mq_shr1(N)
+    // final scaling (× 0x80) for each lane
+    p.iter_mut().for_each(|val| {
         *val = mq_montymul(*val, 0x80);
-    }
+    });
 }
 
 /// Converts a polynomial's coefficients to Montgomery representation in-place.
@@ -302,8 +280,12 @@ pub fn mq_intt(p: &mut [u16; N]) {
 /// * `p` - A mutable slice representing the polynomial to be converted.
 #[inline(always)]
 pub fn mq_poly_tomonty(p: &mut [u16; N]) {
-    for c in p.iter_mut() {
-        *c = mq_montymul(*c, R2);
+    unsafe {
+        let ptr = p.as_mut_ptr();
+
+        for i in 0..N {
+            *ptr.add(i) = mq_montymul(*ptr.add(i), R2);
+        }
     }
 }
 
@@ -318,8 +300,13 @@ pub fn mq_poly_tomonty(p: &mut [u16; N]) {
 /// * `g` - An immutable slice for the second polynomial, `g`.
 #[inline(always)]
 pub fn mq_poly_montymul_ntt(f: &mut [u16; N], g: &[u16; N]) {
-    for (f_i, g_i) in f.iter_mut().zip(g.iter()) {
-        *f_i = mq_montymul(*f_i, *g_i);
+    unsafe {
+        let f_ptr = f.as_mut_ptr();
+        let g_ptr = g.as_ptr();
+
+        for i in 0..N {
+            *f_ptr.add(i) = mq_montymul(*f_ptr.add(i), *g_ptr.add(i));
+        }
     }
 }
 
@@ -329,9 +316,15 @@ pub fn mq_poly_montymul_ntt(f: &mut [u16; N], g: &[u16; N]) {
 /// # Arguments
 /// * `f` - A mutable slice for the first polynomial, `f`. The result is stored here.
 /// * `g` - An immutable slice for the second polynomial, `g`.
+#[inline(always)]
 pub fn mq_poly_sub(f: &mut [u16; N], g: &[u16; N]) {
-    for (f_i, g_i) in f.iter_mut().zip(g.iter()) {
-        *f_i = mq_sub(*f_i, *g_i);
+    unsafe {
+        let f_ptr = f.as_mut_ptr();
+        let g_ptr = g.as_ptr();
+
+        for i in 0..N {
+            *f_ptr.add(i) = mq_sub(*f_ptr.add(i), *g_ptr.add(i));
+        }
     }
 }
 
@@ -350,25 +343,23 @@ pub fn to_ntt_monty(
 pub fn distance(s1: &[u16; N], s2: &[u16; N]) -> u32 {
     let mut s: u32 = 0;
     let mut ng: u32 = 0;
-    let mut u = 0;
 
-    loop {
-        let z:  u32 = sign_extend_u16_to_u32(s1[u]);
+    unsafe {
+        let s1_ptr = s1.as_ptr();
+        let s2_ptr = s2.as_ptr();
 
-        s += z * z;
-        ng |= s;
+        for i in 0..N {
+            let z: u32 = sign_extend_u16_to_u32(*s1_ptr.add(i));
 
-        let z:  u32 = sign_extend_u16_to_u32(s2[u]);
+            s += z * z;
+            ng |= s;
 
-        s += z * z;
-        ng |= s;
+            let z: u32 = sign_extend_u16_to_u32(*s2_ptr.add(i));
 
-        u += 1;
-
-        if u == N {
-            break;
+            s += z * z;
+            ng |= s;
         }
-    };
+    }
 
     ng = 0 - (ng >> 0x1f);
 
@@ -439,11 +430,12 @@ pub fn comp_decode(
     let mut acc = 0;
     let mut acc_len = 0;
     let mut u = 0;
+    let in_ptr = (*input).as_ptr();
 
     v = loop {
         if v < in_max {
             unsafe {
-                acc = (acc << 0x8) | (*input.get_unchecked(v) as u16);
+                acc = (acc << 0x8) | (*in_ptr.add(v) as u16);
             }
             v += 1;
 
@@ -455,7 +447,7 @@ pub fn comp_decode(
                 if acc_len == 0 {
                     if v < in_max {
                         unsafe {
-                            acc = (acc << 0x8) | (*input.get_unchecked(v) as u16);
+                            acc = (acc << 0x8) | (*in_ptr.add(v) as u16);
                         }
                         v += 1;
                         acc_len = 8;
@@ -507,20 +499,15 @@ pub fn verify_raw(
     h: &[u16; N],
     s1: &mut [u16; N]
 ) -> bool {
-    let mut u = 0;
-
     // reduce s2_ elements modulo q ([0..q-1] range).
-    loop {
-        let w = s2[u];
+    unsafe {
+        let s1_ptr = s1.as_mut_ptr();
+        let s2_ptr = s2.as_ptr();
 
-        s1[u] = w + (Q & (0 - (w >> 0xf)));
-
-        u += 1;
-
-        if u == N {
-            break;
+        for i in 0..N {
+            *s1_ptr.add(i) = *s2_ptr.add(i) + (Q & (0 - (*s2_ptr.add(i) >> 0xf)));
         }
-    };
+    }
 
     // computes -s1_ = s2_*h_ - c0_ mod ph_i mod q (in s1_[]).
 
@@ -530,21 +517,15 @@ pub fn verify_raw(
     mq_poly_sub(s1, c0);
 
     // normalize -s1_ elements into th_e [-q/2..q/2] range.
-    u = 0;
-
     let q_shr_1 = Q >> 0x1;
 
-    loop {
-        let w = s1[u];
+    unsafe {
+        let s1_ptr = s1.as_mut_ptr();
 
-        s1[u] = w - (Q & (0 - ((q_shr_1 - w) >> 0xf)));
-
-        u += 1;
-
-        if u == N {
-            break;
+        for i in 0..N {
+            *s1_ptr.add(i) = *s1_ptr.add(i) - (Q & (0 - ((q_shr_1 - *s1_ptr.add(i) >> 0xf))));
         }
-    };
+    }
 
     is_short(s1, s2)
 }

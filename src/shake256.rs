@@ -273,32 +273,30 @@ pub fn process_block(
     shake_ctx[20] = !shake_ctx[20];
 }
 
-/// packs and swap chunks (LE)
-#[inline(always)]
-fn pack_and_swap_chunk(input: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(input[offset..offset+8].try_into().unwrap())
-}
-
 /// absorbs one full 136-byte block into the Keccak state using direct field access.
 #[inline(always)]
 fn absorb_full_block(shake_ctx: &mut [u64; 26], input_block: &[u8]) {
-    shake_ctx[0] = shake_ctx[0] ^ pack_and_swap_chunk(input_block, 0x0);
-    shake_ctx[1] = shake_ctx[1] ^ pack_and_swap_chunk(input_block, 0x8);
-    shake_ctx[2] = shake_ctx[2] ^ pack_and_swap_chunk(input_block, 0x10);
-    shake_ctx[3] = shake_ctx[3] ^ pack_and_swap_chunk(input_block, 0x18);
-    shake_ctx[4] = shake_ctx[4] ^ pack_and_swap_chunk(input_block, 0x20);
-    shake_ctx[5] = shake_ctx[5] ^ pack_and_swap_chunk(input_block, 0x28);
-    shake_ctx[6] = shake_ctx[6] ^ pack_and_swap_chunk(input_block, 0x30);
-    shake_ctx[7] = shake_ctx[7] ^ pack_and_swap_chunk(input_block, 0x38);
-    shake_ctx[8] = shake_ctx[8] ^ pack_and_swap_chunk(input_block, 0x40);
-    shake_ctx[9] = shake_ctx[9] ^ pack_and_swap_chunk(input_block, 0x48);
-    shake_ctx[10] = shake_ctx[10] ^ pack_and_swap_chunk(input_block, 0x50);
-    shake_ctx[11] = shake_ctx[11] ^ pack_and_swap_chunk(input_block, 0x58);
-    shake_ctx[12] = shake_ctx[12] ^ pack_and_swap_chunk(input_block, 0x60);
-    shake_ctx[13] = shake_ctx[13] ^ pack_and_swap_chunk(input_block, 0x68);
-    shake_ctx[14] = shake_ctx[14] ^ pack_and_swap_chunk(input_block, 0x70);
-    shake_ctx[15] = shake_ctx[15] ^ pack_and_swap_chunk(input_block, 0x78);
-    shake_ctx[16] = shake_ctx[16] ^ pack_and_swap_chunk(input_block, 0x80);
+    unsafe {
+        let ptr = input_block.as_ptr();
+
+        shake_ctx[0] ^= u64::from_le_bytes(ptr.add(0x00).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[1] ^= u64::from_le_bytes(ptr.add(0x08).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[2] ^= u64::from_le_bytes(ptr.add(0x10).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[3] ^= u64::from_le_bytes(ptr.add(0x18).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[4] ^= u64::from_le_bytes(ptr.add(0x20).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[5] ^= u64::from_le_bytes(ptr.add(0x28).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[6] ^= u64::from_le_bytes(ptr.add(0x30).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[7] ^= u64::from_le_bytes(ptr.add(0x38).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[8] ^= u64::from_le_bytes(ptr.add(0x40).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[9] ^= u64::from_le_bytes(ptr.add(0x48).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[10] ^= u64::from_le_bytes(ptr.add(0x50).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[11] ^= u64::from_le_bytes(ptr.add(0x58).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[12] ^= u64::from_le_bytes(ptr.add(0x60).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[13] ^= u64::from_le_bytes(ptr.add(0x68).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[14] ^= u64::from_le_bytes(ptr.add(0x70).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[15] ^= u64::from_le_bytes(ptr.add(0x78).cast::<[u8; 8]>().read_unaligned());
+        shake_ctx[16] ^= u64::from_le_bytes(ptr.add(0x80).cast::<[u8; 8]>().read_unaligned());
+    }
 }
 
 /// inject bytes data into the shake context
@@ -333,9 +331,11 @@ pub fn shake_inject(
         let mut i = 0;
 
         while i != full_words_in_remainder {
-            let data_chunk = pack_and_swap_chunk(input, offset + i * 8);
+            unsafe {
+                let data_chunk = u64::from_le_bytes(input.as_ptr().add(offset + i * 8).cast::<[u8; 8]>().read_unaligned());
 
-            shake_ctx[i] ^= data_chunk;
+                shake_ctx[i] ^= data_chunk;
+            }
 
             i += 1;
         };
@@ -343,6 +343,7 @@ pub fn shake_inject(
         let remainder_offset = offset + (full_words_in_remainder * 8);
 
         i = 0;
+
         while i != final_bytes {
             let lane_index = full_words_in_remainder;
 
@@ -390,11 +391,11 @@ pub fn shake_extract(
     for _ in 0..full_runs {
         process_block(shake_ctx);
 
-        let dest_slice = &mut out[words_written..words_written + 17];
+        let dest_slice = &mut out[words_written..words_written + 0x11];
 
-        dest_slice.copy_from_slice(&shake_ctx[..17]);
+        dest_slice.copy_from_slice(&shake_ctx[..0x11]);
 
-        words_written += 17;
+        words_written += 0x11;
     }
 
     if remainder_bytes > 0 {
@@ -405,6 +406,7 @@ pub fn shake_extract(
 
         if remainder_words > 0 {
             let dest_slice = &mut out[words_written..words_written + remainder_words];
+
             dest_slice.copy_from_slice(&shake_ctx[..remainder_words]);
             words_written += remainder_words;
         }

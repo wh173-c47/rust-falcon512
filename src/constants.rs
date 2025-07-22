@@ -1,6 +1,4 @@
 pub const M8: u64 = 0x00FF00FF00FF00FF;
-pub const M16: u64 = 0x0000FFFF0000FFFF;
-pub const M32: u64 = 0x00000000FFFFFFFF;
 pub const R_M8: u64 = 0xFF00FF00FF00FF00;
 
 pub const LOGN: u8 = 9;
@@ -12,8 +10,6 @@ pub const SIG_COMP: u8 = 1;
 
 // shake256 byte absorption rate (aka OQS_SHA3__SHAKE256_RATE)    // [4+2+2+2=10 bytes]
 pub const SHAKE256_RATE: u8 = 136;
-
-pub const N_ROUNDS: u8 = 24;
 
 pub const FALCON_PK_SIZE: usize = 897;
 
@@ -40,9 +36,6 @@ pub const Q: u16 = 12289;
 pub const Q0I: u16 = 12287;
 pub const R: u16 = 4091;
 pub const R2: u16 = 10952;
-
-// modular inverse of N (mod q)
-pub const N_INV: u16 = 12265;
 
 // Table for NTT, binary case:
 // GMB[x] = g^rev(x) mod q monty

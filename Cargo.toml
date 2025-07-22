@@ -11,6 +11,7 @@ crate-type = ["cdylib", "lib"]
 num-format = "0.4.4"
 jemallocator = "0.5.4"
 jemalloc-ctl = "0.5.4"
+rand = "0.9.2"
 
 [features]
 default = []
@@ -30,6 +31,7 @@ lto = "fat"
 panic = "abort"
 overflow-checks = false
 strip = true
+debug = false
 
 [build]
 rustflags = ["-C", "target-cpu=native"]

@@ -46,7 +46,7 @@ pub fn hash_to_point_ct(extracted: &[u64], x: &mut [u16; N], tt1: &mut [u16; N])
 
         let mut out_base = 0usize;
 
-        while u != 0xB3 {
+        while u != 0xb3 {
             let raw = *ex_ptr.add(u);
             let swapped = swap_byte_pairs(raw);
             let dest = tt1_ptr.add(out_base);
@@ -61,10 +61,10 @@ pub fn hash_to_point_ct(extracted: &[u64], x: &mut [u16; N], tt1: &mut [u16; N])
         }
 
         let raw = *ex_ptr.add(0xB3);
-        let swapped = swap_byte_pairs(raw) & 0xFFFF;
+        let swapped = swap_byte_pairs(raw) & 0xffff;
         let lane = swapped as u64;
 
-        *tt1_ptr.add(out_base + 0xC) = handle_hash_to_point_bytes_pair(lane);
+        *tt1_ptr.add(out_base + 0xc) = handle_hash_to_point_bytes_pair(lane);
     }
 
     let mut p = 1;

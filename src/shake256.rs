@@ -514,7 +514,7 @@ pub fn shake_flip(shake_ctx: &mut [u64; 26]) {
 /// # Returns
 /// An array of `u64` words, with a length of `SHAKE_EXTRACT_OUT_CAPACITY_WORDS`, containing the extracted output.
 pub fn shake_extract(shake_ctx: &mut [u64; 26]) -> [u64; SHAKE_EXTRACT_OUT_CAPACITY_WORDS] {
-    let len = M << 1;
+    let len = (M << 1) as usize;
 
     let mut out = [0u64; SHAKE_EXTRACT_OUT_CAPACITY_WORDS];
     let mut words_written = 0;

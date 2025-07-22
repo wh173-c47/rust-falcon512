@@ -2,6 +2,14 @@
 name = "falcon512_rs"
 version = "0.1.0"
 edition = "2021"
+description = "Pure Rust implementation of Falcon-512 signature scheme"
+license = "Apache-2.0"
+authors = ["wh173-c47 <wh173-c47>"]
+repository = "https://github.com/wh173-c47/rust-falcon512"
+documentation = "https://docs.rs/falcon512_rs"
+readme = "README.md"
+keywords = ["falcon", "post-quantum", "crypto", "signature", "nist"]
+categories = ["cryptography", "post-quantum", "no-std", "algorithms"]
 
 [lib]
 name = "falcon512_rs"

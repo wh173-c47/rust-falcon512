@@ -1,5 +1,13 @@
-use crate::constants::{SHAKE256_RATE, SHAKE_EXTRACT_OUT_CAPACITY_WORDS, SHAKE_ROUND_CONSTANTS};
+use crate::constants::{SHAKE256_RATE, SHAKE_EXTRACT_OUT_CAPACITY_WORDS, SHAKE_ROUND_CONSTANTS, M};
 
+/// Performs the Theta and Rho steps (step 1) of the Keccak permutation.
+///
+/// # Parameters
+/// - `p`: A mutable pointer to the state array (expected to be 25 `u64` words).
+///
+/// # Safety
+/// This function operates on a raw pointer. The caller must ensure that
+/// `p` points to a valid and properly aligned state array.
 #[inline(always)]
 fn theta_rho_step_1(p: *mut u64) {
     unsafe {
@@ -44,6 +52,15 @@ fn theta_rho_step_1(p: *mut u64) {
     }
 }
 
+/// Performs the Chi and Iota steps (step 1) of the Keccak permutation for the given round.
+///
+/// # Parameters
+/// - `p`: A mutable pointer to the state array (expected to be 25 `u64` words).
+/// - `round_constant`: The round constant for the current permutation round.
+///
+/// # Safety
+/// This function operates on a raw pointer. The caller must ensure that
+/// `p` points to a valid and properly aligned state array.
 #[inline(always)]
 fn chi_iota_step_1(p: *mut u64, round_constant: u64) {
     unsafe {
@@ -113,6 +130,14 @@ fn chi_iota_step_1(p: *mut u64, round_constant: u64) {
     }
 }
 
+/// Performs the Theta and Rho steps (step 2) of the Keccak permutation.
+///
+/// # Parameters
+/// - `p`: A mutable pointer to the state array (expected to be 25 `u64` words).
+///
+/// # Safety
+/// This function operates on a raw pointer. The caller must ensure that
+/// `p` points to a valid and properly aligned state array.
 #[inline(always)]
 fn theta_rho_step_2(p: *mut u64) {
     unsafe {
@@ -157,6 +182,15 @@ fn theta_rho_step_2(p: *mut u64) {
     }
 }
 
+/// Performs the Chi, Iota, and Pi steps (step 2) of the Keccak permutation for the given round.
+///
+/// # Parameters
+/// - `p`: A mutable pointer to the state array (expected to be 25 `u64` words).
+/// - `round_constant`: The round constant for the current permutation round.
+///
+/// # Safety
+/// This function operates on a raw pointer. The caller must ensure that
+/// `p` points to a valid and properly aligned state array.
 #[inline(always)]
 fn chi_iota_pi_step_2(p: *mut u64, round_constant: u64) {
     unsafe {
@@ -256,8 +290,13 @@ fn chi_iota_pi_step_2(p: *mut u64, round_constant: u64) {
     }
 }
 
-/// processes the provided shake256 state
-/// result is written over shake context
+/// Processes the provided SHAKE256 state in-place.
+///
+/// This function performs the Keccak permutation over the provided `shake_ctx` state.
+/// The result is written back into the same context.
+///
+/// # Parameters
+/// - `shake_ctx`: The mutable SHAKE256 state array (26 `u64` words) to be permuted.
 #[inline(always)]
 pub fn process_block(shake_ctx: &mut [u64; 26]) {
     let shake_ptr = shake_ctx.as_mut_ptr();
@@ -341,7 +380,14 @@ pub fn process_block(shake_ctx: &mut [u64; 26]) {
     }
 }
 
-/// absorbs one full 136-byte block into the Keccak state using direct field access.
+/// Absorbs one full 136-byte block into the Keccak state using direct field access.
+///
+/// # Parameters
+/// - `shake_ctx`: The mutable SHAKE256 state array (26 `u64` words).
+/// - `input_block`: The input data block to absorb (must be exactly 136 bytes).
+///
+/// # Panics
+/// Panics if `input_block.len()` is not equal to 136.
 #[inline(always)]
 fn absorb_full_block(shake_ctx: &mut [u64; 26], input_block: &[u8]) {
     unsafe {
@@ -368,8 +414,16 @@ fn absorb_full_block(shake_ctx: &mut [u64; 26], input_block: &[u8]) {
     }
 }
 
-/// inject bytes data into the shake context
-/// does not support consecutive calls
+/// Injects byte data into the SHAKE256 context.
+///
+/// After this call, consecutive calls are not supported.
+///
+/// # Parameters
+/// - `shake_ctx`: The mutable SHAKE256 state array (26 `u64` words).
+/// - `input`: The input bytes to inject into the state.
+///
+/// # Note
+/// This function does not support consecutive calls; call `shake_flip()` before further extraction or other injection.
 pub fn shake_inject(shake_ctx: &mut [u64; 26], input: &[u8]) {
     let mut in_len = input.len();
     let mut offset: usize = 0;
@@ -428,10 +482,14 @@ pub fn shake_inject(shake_ctx: &mut [u64; 26], input: &[u8]) {
     shake_ctx[25] = in_len as u64;
 }
 
-/// flips shake256 state to output mode
-/// after this call:
-/// shake256_inject() can no longer be called on context
-/// shake256_extract() can be called
+/// Flips the SHAKE256 state to output (squeeze) mode.
+///
+/// After this call:
+/// - `shake256_inject()` must not be called on the context.
+/// - `shake256_extract()` can be called to extract output.
+///
+/// # Parameters
+/// - `shake_ctx`: The mutable SHAKE256 state array (26 `u64` words) to be flipped.
 pub fn shake_flip(shake_ctx: &mut [u64; 26]) {
     let last: u16 = shake_ctx[25] as u16;
     let o1: usize = (last >> 0x3) as usize;
@@ -445,11 +503,18 @@ pub fn shake_flip(shake_ctx: &mut [u64; 26]) {
     shake_ctx[25] = SHAKE256_RATE as u64;
 }
 
-/// extracts bytes from shake256 context ("squeeze" op, 8 bytes chunks)
-/// context must have been flipped to output mode
+/// Extracts bytes from the SHAKE256 context ("squeeze" operation, 8-byte chunks).
+///
+/// The context must have been flipped to output mode using [`shake_flip()`].
+/// Usecase is tied to Falcon512 as output will be enforced to 1434 bytes.
+///
+/// # Parameters
+/// - `shake_ctx`: The SHAKE256 state array (26 `u64` words) to extract from.
+///
+/// # Returns
+/// An array of `u64` words, with a length of `SHAKE_EXTRACT_OUT_CAPACITY_WORDS`, containing the extracted output.
 pub fn shake_extract(shake_ctx: &mut [u64; 26]) -> [u64; SHAKE_EXTRACT_OUT_CAPACITY_WORDS] {
-    // M << 1
-    let len = 1434;
+    let len = M << 1;
 
     let mut out = [0u64; SHAKE_EXTRACT_OUT_CAPACITY_WORDS];
     let mut words_written = 0;

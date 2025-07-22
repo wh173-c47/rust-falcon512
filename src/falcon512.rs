@@ -7,7 +7,13 @@ use crate::{
     utils::{mq_add, mq_montymul, mq_sub, revert, sign_extend_u16_to_u32, swap_byte_pairs},
 };
 
-// TODO: see below if no branching worth vs early exited branching
+/// Handles a pair of bytes as a `u64` and converts it to a field element.
+///
+/// # Parameters
+/// - `pair`: The input 64-bit value containing the byte pair to be processed.
+///
+/// # Returns
+/// The resulting field element as `u16`.
 #[inline(always)]
 fn handle_hash_to_point_bytes_pair(pair: u64) -> u16 {
     let mut r = pair - (24578 & ((pair - 24578 >> 63) - 1));
@@ -18,8 +24,15 @@ fn handle_hash_to_point_bytes_pair(pair: u64) -> u16 {
     (r | ((pair - 61445) >> 63) - 1) as u16
 }
 
-// constant-time produces a new point from a flipped shake256 context
-// TODO: optimize further
+/// Constant-time: produces a new point from a flipped shake256 context.
+///
+/// # Parameters
+/// - `extracted`: The extracted state from SHAKE256, as a slice of `u64`.
+/// - `x`: Output polynomial coefficients (as `[u16; N]`), to be filled.
+/// - `tt1`: Temporary storage, as mutable `[u16; N]`.
+///
+/// # Details
+/// Produces a new point from the extracted SHAKE256 state in constant time.
 #[inline(always)]
 pub fn hash_to_point_ct(extracted: &[u64], x: &mut [u16; N], tt1: &mut [u16; N]) {
     let x_ptr = x.as_mut_ptr();
@@ -328,6 +341,17 @@ pub fn to_ntt_monty(pubkey: &mut [u16; N]) {
     mq_poly_tomonty(pubkey);
 }
 
+/// Computes the squared Euclidean distance between two vectors, with sign extension.
+///
+/// # Parameters
+/// - `s1`: The first input vector, as `[u16; N]`.
+/// - `s2`: The second input vector, as `[u16; N]`.
+///
+/// # Returns
+/// The sum of squared, sign-extended coefficients as a `u32`.
+///
+/// # Safety
+/// Uses unsafe pointer arithmetic for performance.
 pub fn distance(s1: &[u16; N], s2: &[u16; N]) -> u32 {
     let mut s: u32 = 0;
     let mut ng: u32 = 0;
@@ -354,13 +378,29 @@ pub fn distance(s1: &[u16; N], s2: &[u16; N]) -> u32 {
     s | ng
 }
 
-/// returns true if given vector (2N coord, in two halves) is acceptable as signature
-/// compares appropriate norm of the vector with acceptance bound
+/// Returns true if the given vector (2N coordinates, in two halves) is acceptable as a signature.
+///
+/// Compares the squared Euclidean norm of the concatenated vectors with an acceptance bound.
+///
+/// # Parameters
+/// - `s1`: The first half of the signature vector, as `[u16; N]`.
+/// - `s2`: The second half of the signature vector, as `[u16; N]`.
+///
+/// # Returns
+/// `true` if the vector is considered "short" (acceptable as a signature), otherwise `false`.
 pub fn is_short(s1: &[u16; N], s2: &[u16; N]) -> bool {
     distance(s1, s2) <= 34034726
 }
 
-// decode the public key
+/// Decodes the public key into an internal format.
+///
+/// # Parameters
+/// - `x`: Output polynomial coefficients, as mutable `[u16; N]`.
+/// - `input`: Serialized public key bytes, as `[u8; FALCON_PK_SIZE]`.
+/// - `offset`: Offset into the input buffer to start decoding from.
+///
+/// # Returns
+/// The number of bytes read from the input buffer.
 pub fn mq_decode(x: &mut [u16; N], input: &[u8; FALCON_PK_SIZE], offset: usize) -> usize {
     let mut acc: u64 = 0;
     let mut in_offset = offset;
@@ -408,7 +448,15 @@ pub fn mq_decode(x: &mut [u16; N], input: &[u8; FALCON_PK_SIZE], offset: usize) 
     ret
 }
 
-// from an in, an out and a max in len, returns the nb of bytes read from the buffer
+/// Decodes a compressed vector from a byte buffer.
+///
+/// # Parameters
+/// - `input`: The input byte buffer to decode from.
+///
+/// # Returns
+/// A tuple containing:
+///   - The decoded vector as `[u16; N]`
+///   - The number of bytes read from the buffer.
 pub fn comp_decode(input: &[u8]) -> ([u16; N], usize) {
     let in_max = input.len();
     let mut out = [0u16; N];
@@ -477,8 +525,16 @@ pub fn comp_decode(input: &[u8]) -> ([u16; N], usize) {
     (out, v)
 }
 
-// internal signature verification
-// returns true if valid else false
+/// Internal signature verification routine.
+///
+/// # Parameters
+/// - `c0`: Mutable output buffer, as `[u16; N]`.
+/// - `s2`: Second part of the signature, as `[u16; N]`.
+/// - `h`: Hashed public key, as `[u16; N]`.
+/// - `s1`: Mutable first part of the signature, as `[u16; N]`.
+///
+/// # Returns
+/// `true` if the signature is valid, `false` otherwise.
 pub fn verify_raw(c0: &mut [u16; N], s2: &[u16; N], h: &[u16; N], s1: &mut [u16; N]) -> bool {
     // reduce s2_ elements modulo q ([0..q-1] range).
     unsafe {
@@ -511,6 +567,16 @@ pub fn verify_raw(c0: &mut [u16; N], s2: &[u16; N], h: &[u16; N], s1: &mut [u16;
     is_short(s1, s2)
 }
 
+/// Converts a serialized public key to NTT format, verifying structure.
+///
+/// # Parameters
+/// - `pk`: Serialized public key bytes, as `[u8; FALCON_PK_SIZE]`.
+///
+/// # Returns
+/// The decoded public key in NTT format as `[u16; N]`.
+///
+/// # Panics
+/// Panics if the public key is invalid.
 pub fn pk_to_ntt_fmt(pk: &[u8; FALCON_PK_SIZE]) -> [u16; N] {
     // 1st byte should have the form "0000nnnn"
     if (pk[0] >> 0x4) != 0 || pk[0] & 0xf != LOGN {
@@ -534,7 +600,21 @@ pub fn pk_to_ntt_fmt(pk: &[u8; FALCON_PK_SIZE]) -> [u16; N] {
     pk_ntt_fmt
 }
 
-// verify that the given sig, msg and pub key matches
+/// Verifies that the given signature, message, and public key match.
+///
+/// # Parameters
+/// - `nonce_msg`: Message (and nonce) bytes.
+/// - `sig`: Signature bytes.
+/// - `pk_ntt_fmt`: Public key in NTT format, as `[u16; N]`.
+///
+/// # Returns
+/// `true` if the signature is valid, otherwise `false`.
+///
+/// # Panics
+/// Panics if the public key is invalid.
+/// Panics if the signature len is invalid.
+/// Panics if fails decoding signature.
+/// Panics if the nonce + message len is invalid (0 len message).
 pub fn verify(nonce_msg: &[u8], sig: &[u8], pk_ntt_fmt: &[u16; N]) -> bool {
     let sig_len = sig.len();
 

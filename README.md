@@ -1,6 +1,7 @@
-# Falcon Cryptographic Primitives (Rust)
+# Falcon512 Rust
 
-This crate provides an efficient, constant-time implementation of key cryptographic primitives for the Falcon signature scheme, as well as supporting modular arithmetic and encoding/decoding routines. The code is tailored for use in lattice-based cryptography and digital signatures, with a focus on performance and security.
+This crate provides an efficient, constant-time implementation of key cryptographic primitives for the Falcon512 signature scheme, as well as supporting modular arithmetic and encoding/decoding routines. The code is tailored for use in lattice-based cryptography and digital signatures, with a focus on performances.
+Implementation allows to be run on Solana (tested despite current max transaction size limit) and potentially other Rust compatible chains (untested).
 
 ## Features
 
@@ -8,6 +9,9 @@ This crate provides an efficient, constant-time implementation of key cryptograp
 - **Montgomery modular arithmetic**: Constant-time multiplication, addition, subtraction, and utility functions for cryptographic fields.
 - **Number Theoretic Transform (NTT)**: Fast polynomial transforms for use in lattice-based cryptography.
 - **Signature verification and encoding**: Utilities for signature checking and public key handling, including NTT format conversion.
+- **To be implemented**: 
+  - `keygen`
+  - `sign`
 
 ## Highlights
 
@@ -53,22 +57,14 @@ Include the crate in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-falcon_primitives = "0.1"
+falcon512_rs = "0.1"
 ```
 
-Example for hashing and signature verification:
+Example for signature verification:
 
 ```rust
-let mut shake_ctx = [0u64; 26];
-
-shake_inject(&mut shake_ctx, message);
-shake_flip(&mut shake_ctx);
-
-let output = shake_extract(&mut shake_ctx);
-
-// For signature verification
-let pk_ntt = pk_to_ntt_fmt(public_key_bytes);
-let valid = verify(nonce_msg, signature_bytes, &pk_ntt);
+let pk_ntt = pk_to_ntt_fmt(&pk);
+let valid = verify(&nonce_msg, &sig, &pk_ntt);
 
 assert!(valid);
 ```
@@ -83,29 +79,23 @@ You can run the benchmarks using the provided script:
 ./run_benchmark.sh
 ```
 
-Example output:
+Example output (ran on a i5-10210U CPU @ 1.60GHz × 8):
 
 ```
-🚀 Building and running benchmark for falcon512_rs...
-   Compiling falcon512_rs v0.1.0 (...)
-    Finished `release` profile [optimized] target(s) in 8.23s
-     Running `target/release/examples/benchmark`
 --- Running Falcon512 Benchmarks ---
 📊 Falcon512 Verify NIST Test vector 0
-Bench: 100,000 runs, 2908.489 ms total
+Bench: 100,000 runs, 2521.899 ms total
 Avg per call:
-  - Time: 0.029085 ms (34382.12 ops/sec)
-  - CPU Cycles: 98,891
-  - Memory: bytes peak usage 3,600,384
+  - Time: 0.025219 ms (39652.66 ops/sec)
+  - CPU Cycles: 86,299
+  - Memory: bytes peak usage 3,604,480
 
 📊 Falcon512 Verify NIST Test vector 99
-Bench: 100,000 runs, 4751.692 ms total
+Bench: 100,000 runs, 3593.758 ms total
 Avg per call:
-  - Time: 0.047517 ms (21045.14 ops/sec)
-  - CPU Cycles: 143,778
-  - Memory: bytes peak usage 3,612,672
-
-✅ Benchmark finished.
+  - Time: 0.035938 ms (27826.02 ops/sec)
+  - CPU Cycles: 109,238
+  - Memory: bytes peak usage 3,616,768
 ```
 
 > **Benchmark Disclaimer:**  
@@ -118,6 +108,7 @@ Avg per call:
 - All cryptographic routines are implemented to be constant-time, but you should always audit and test for your specific target and platform.
 - Never use these primitives without understanding the Falcon signature scheme and its parameterization.
 - This crate assumes valid inputs and panics on malformed data where appropriate.
+- This code use unchecked maths and unsafe pointer accesses & updates (on bounded indexes).
 
 ## License
 

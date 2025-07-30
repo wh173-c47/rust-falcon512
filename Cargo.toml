@@ -39,7 +39,6 @@ lto = "fat"
 panic = "abort"
 overflow-checks = false
 strip = true
-debug = false
 
 [build]
 rustflags = ["-C", "target-cpu=native"]

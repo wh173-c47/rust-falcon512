@@ -18,13 +18,9 @@ use crate::constants::{M8, Q, Q0I, R_M8};
 pub fn mq_montymul(a: u16, b: u16) -> u16 {
     let res: u32 = (a as u32) * (b as u32);
     let m = res as u16 * Q0I;
-    let t = (res + (m as u32) * Q as u32) >> 16;
+    let t = ((res + m as u32 * Q as u32) >> 16) as u16;
 
-    if t < Q as u32 {
-        t as u16
-    } else {
-        (t - Q as u32) as u16
-    }
+    t - (t >= Q) as u16 * Q
 }
 
 /// Performs modular addition: `(a + b) mod Q`.
@@ -37,7 +33,9 @@ pub fn mq_montymul(a: u16, b: u16) -> u16 {
 /// The sum of `a` and `b`, reduced modulo `Q`.
 #[inline(always)]
 pub fn mq_add(a: u16, b: u16) -> u16 {
-    ((a as u32 + b as u32) % Q as u32) as u16
+    let c = a + b - Q;
+
+    c + (Q & 0 - (c >> 0xf))
 }
 
 /// Performs modular subtraction: `(a - b) mod Q`.
@@ -52,7 +50,7 @@ pub fn mq_add(a: u16, b: u16) -> u16 {
 pub fn mq_sub(a: u16, b: u16) -> u16 {
     let c = a - b;
 
-    (c + if c > a { Q } else { 0 }) as u16
+    c + (Q & 0 - (c >> 0xf))
 }
 
 /// Swaps byte pairs in a 64-bit value using the provided masks.

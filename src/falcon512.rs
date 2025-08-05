@@ -102,8 +102,7 @@ pub fn hash_to_point_ct(extracted: &[u64], x: &mut [u16; N], tt1: &mut [u16; N])
             loop {
                 let sv: u16 = *x_ptr.add(u);
                 let j = u as u16 - v;
-                // mk = (sv >> 15) - 1 (but we work in uint256 now)
-                // mk is 0xFFFFFFFFFFFFFFFF... for negative condition
+                // mk = (sv >> 15) - 1
                 let mut mk = (sv >> 0xf) - 1;
 
                 // update v (unsigned arithmetic, subtract mk)
@@ -542,7 +541,9 @@ pub fn verify_raw(c0: &mut [u16; N], s2: &[u16; N], h: &[u16; N], s1: &mut [u16;
         let s2_ptr = s2.as_ptr();
 
         for i in 0..N {
-            *s1_ptr.add(i) = *s2_ptr.add(i) + (Q & (0 - (*s2_ptr.add(i) >> 0xf)));
+            let ptr = s2_ptr.add(i);
+
+            *s1_ptr.add(i) = *ptr + (Q & (0 - (*ptr >> 0xf)));
         }
     }
 
@@ -560,7 +561,9 @@ pub fn verify_raw(c0: &mut [u16; N], s2: &[u16; N], h: &[u16; N], s1: &mut [u16;
         let s1_ptr = s1.as_mut_ptr();
 
         for i in 0..N {
-            *s1_ptr.add(i) = *s1_ptr.add(i) - (Q & (0 - (q_shr_1 - *s1_ptr.add(i) >> 0xf)));
+            let ptr = s1_ptr.add(i);
+
+            *ptr = *ptr - (Q & (0 - (q_shr_1 - *ptr >> 0xf)));
         }
     }
 

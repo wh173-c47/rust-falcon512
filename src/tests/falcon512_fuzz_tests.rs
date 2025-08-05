@@ -2,7 +2,7 @@
 pub mod tests {
     use crate::{
         falcon512::{pk_to_ntt_fmt, verify},
-        tests::test_utils::{mutation_utils::*, get_valid_test_vector},
+        tests::test_utils::{get_valid_test_vector, mutation_utils::*},
     };
 
     // Helper to ensure mutation really changed the data
@@ -20,7 +20,11 @@ pub mod tests {
             randomize_sig(&mut mutated);
             assert_mutated(&sig, &mutated);
             assert!(
-                !verify(&msg, &mutated, &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())),
+                !verify(
+                    &msg,
+                    &mutated,
+                    &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())
+                ),
                 "Randomized sig should not verify"
             );
         }
@@ -37,7 +41,11 @@ pub mod tests {
 
             assert_mutated(&sig, &mutated);
             assert!(
-                !verify(&msg, &mutated, &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())),
+                !verify(
+                    &msg,
+                    &mutated,
+                    &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())
+                ),
                 "Bit-flipped sig ({}x) should not verify",
                 n
             );
@@ -55,7 +63,11 @@ pub mod tests {
             assert_mutated(&sig, &mutated);
 
             assert!(
-                !verify(&msg, &mutated, &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())),
+                !verify(
+                    &msg,
+                    &mutated,
+                    &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())
+                ),
                 "Swapped sig bytes ({}x) should not verify",
                 n
             );
@@ -71,7 +83,11 @@ pub mod tests {
         assert!(mutated.iter().all(|&b| b == 0));
 
         assert!(
-            !verify(&msg, &mutated, &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())),
+            !verify(
+                &msg,
+                &mutated,
+                &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())
+            ),
             "Zero sig should not verify"
         );
     }
@@ -84,7 +100,11 @@ pub mod tests {
         ff_sig(&mut mutated);
         assert!(mutated.iter().all(|&b| b == 0xFF));
         assert!(
-            !verify(&msg, &mutated, &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())),
+            !verify(
+                &msg,
+                &mutated,
+                &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())
+            ),
             "All-0xFF sig should not verify"
         );
     }
@@ -99,7 +119,11 @@ pub mod tests {
 
                 assert_eq!(mutated.len(), sig.len() - n);
                 assert!(
-                    !verify(&msg, &mutated, &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())),
+                    !verify(
+                        &msg,
+                        &mutated,
+                        &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())
+                    ),
                     "Truncated sig ({} bytes) should not verify",
                     n
                 );
@@ -116,7 +140,11 @@ pub mod tests {
 
             assert_eq!(mutated.len(), sig.len() + n);
             assert!(
-                !verify(&msg, &mutated, &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())),
+                !verify(
+                    &msg,
+                    &mutated,
+                    &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())
+                ),
                 "Randomly extended sig ({} bytes) should not verify",
                 n
             );
@@ -132,7 +160,11 @@ pub mod tests {
 
             assert_eq!(mutated.len(), sig.len() + n);
             assert!(
-                !verify(&msg, &mutated, &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())),
+                !verify(
+                    &msg,
+                    &mutated,
+                    &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())
+                ),
                 "Zero extended sig ({} bytes) should not verify",
                 n
             );
@@ -149,7 +181,11 @@ pub mod tests {
             randomize_nonce(&mut mutated);
             assert_mutated(&msg[..40], &mutated[..40]);
             assert!(
-                !verify(&mutated, &sig, &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())),
+                !verify(
+                    &mutated,
+                    &sig,
+                    &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())
+                ),
                 "Randomized nonce should not verify"
             );
         }
@@ -163,7 +199,11 @@ pub mod tests {
         zero_nonce(&mut mutated);
         assert!(mutated[..40].iter().all(|&b| b == 0));
         assert!(
-            !verify(&mutated, &sig, &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())),
+            !verify(
+                &mutated,
+                &sig,
+                &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())
+            ),
             "Zero nonce should not verify"
         );
     }
@@ -176,7 +216,11 @@ pub mod tests {
         ff_nonce(&mut mutated);
         assert!(mutated[..40].iter().all(|&b| b == 0xFF));
         assert!(
-            !verify(&mutated, &sig, &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())),
+            !verify(
+                &mutated,
+                &sig,
+                &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())
+            ),
             "0xFF nonce should not verify"
         );
     }
@@ -191,7 +235,11 @@ pub mod tests {
             swap_nonce_bytes(&mut mutated, n);
             assert_mutated(&msg[..40], &mutated[..40]);
             assert!(
-                !verify(&mutated, &sig, &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())),
+                !verify(
+                    &mutated,
+                    &sig,
+                    &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())
+                ),
                 "Swapped nonce bytes ({}x) should not verify",
                 n
             );

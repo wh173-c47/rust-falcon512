@@ -18,7 +18,7 @@ use crate::constants::{M8, Q, Q0I, R_M8};
 pub fn mq_montymul(a: u16, b: u16) -> u16 {
     let res: u32 = (a as u32) * (b as u32);
     let m = res as u16 * Q0I;
-    let t = ((res + m as u32 * Q as u32) >> 16) as u16;
+    let t = ((res + m as u32 * Q as u32) >> 0x10) as u16;
 
     t - (t >= Q) as u16 * Q
 }

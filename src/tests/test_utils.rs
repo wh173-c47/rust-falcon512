@@ -227,7 +227,11 @@ pub mod mutation_utils {
 
     /// Truncate sig by n byte; returns new Vec.
     pub fn truncate_sig(sig: &[u8], n: usize) -> Vec<u8> {
-        if sig.is_empty() { vec![] } else { sig[..sig.len()-n].to_vec() }
+        if sig.is_empty() {
+            vec![]
+        } else {
+            sig[..sig.len() - n].to_vec()
+        }
     }
 
     /// Extend sig by n byte with a random byte.

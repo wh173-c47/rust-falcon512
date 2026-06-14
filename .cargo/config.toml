@@ -1,0 +1,7 @@
+# Build configuration.
+#
+# Turn it on for a portable/CPU-tuned release build; keep it off when comparing
+# callgrind numbers that must reproduce bit-for-bit on another host.
+#
+[build]
+rustflags = ["-C", "target-cpu=native"]

@@ -1,6 +1,6 @@
 [package]
 name = "falcon512_rs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Pure Rust implementation of Falcon-512 signature scheme"
 license = "Apache-2.0"
@@ -20,6 +20,8 @@ num-format = "0.4.4"
 jemallocator = "0.5.4"
 jemalloc-ctl = "0.5.4"
 rand = "0.9.2"
+iai-callgrind = "=0.3.1"
+criterion = "0.7.0"
 
 [features]
 default = []
@@ -40,7 +42,29 @@ panic = "abort"
 overflow-checks = false
 strip = true
 
-[build]
-rustflags = ["-C", "target-cpu=native"]
+# `cargo bench` profile. Same optimization as release, but symbols are kept (no strip)
+# and debug info is on so callgrind/iai-callgrind can attribute instructions to the
+# benchmarked function (toggle-collect needs the symbol). panic=abort is dropped because
+# the bench harness requires unwinding support.
+[profile.bench]
+codegen-units = 1
+opt-level = 3
+lto = "fat"
+overflow-checks = false
+strip = false
+debug = true
 
-[dependencies]
+# Wall-clock benchmark (Criterion): ns / ops-sec.
+[[bench]]
+name = "benchmark"
+harness = false
+
+# Wall-clock benchmark (jemalloc + rdtsc): ns / CPU cycles / peak memory. Gated by `--features bench`.
+[[bench]]
+name = "wall_clock_benchmark"
+harness = false
+
+# Deterministic, CPU-load-agnostic instruction-count benchmark (valgrind/callgrind via iai-callgrind).
+[[bench]]
+name = "instr_count"
+harness = false

@@ -1,9 +1,10 @@
 use crate::{
     constants::{N, NONCE_LEN, Q, SIG_COMP_MAXSIZE},
     falcon512::{
-        comp_decode, distance, hash_to_point_ct, mq_intt, mq_ntt, mq_poly_montymul_ntt, mq_poly_sub,
+        comp_decode, distance, hash_to_point_vartime, mq_intt, mq_ntt, mq_poly_montymul_ntt,
+        mq_poly_sub,
     },
-    shake256::{shake_extract, shake_flip, shake_inject},
+    shake256::{shake_extract_vartime, shake_flip, shake_inject},
 };
 
 // internal signature verification
@@ -70,14 +71,16 @@ pub fn verify_distance(nonce_msg: &[u8], sig: &[u8], pk_ntt_fmt: &[u16; N]) -> u
     shake_inject(&mut shake_ctx, &nonce_msg);
     shake_flip(&mut shake_ctx);
 
-    let extracted = shake_extract(&mut shake_ctx);
+    let extracted = shake_extract_vartime(&mut shake_ctx);
 
-    let mut tmp_buff = [0u16; N];
     let mut hash_nonce_msg = [0u16; N];
 
-    hash_to_point_ct(&extracted, &mut hash_nonce_msg, &mut tmp_buff);
+    // Mirror the production `verify` path: 9-block squeeze + variable-time hash-to-point.
+    hash_to_point_vartime(&extracted, &mut hash_nonce_msg);
 
-    verify_distance_raw(&mut hash_nonce_msg, &decoded_sig, pk_ntt_fmt, &mut tmp_buff)
+    let mut s1 = [0u16; N];
+
+    verify_distance_raw(&mut hash_nonce_msg, &decoded_sig, pk_ntt_fmt, &mut s1)
 }
 
 pub fn get_valid_test_vector() -> (Vec<u8>, Vec<u8>, Vec<u8>) {

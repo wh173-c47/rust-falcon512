@@ -1,7 +1,9 @@
 # Falcon512 Rust
 
-This crate provides an efficient, constant-time implementation of key cryptographic primitives for the Falcon512 signature scheme, as well as supporting modular arithmetic and encoding/decoding routines. The code is tailored for use in lattice-based cryptography and digital signatures, with a focus on performances.
+This crate provides an efficient implementation of key cryptographic primitives for the Falcon512 signature scheme, as well as supporting modular arithmetic and encoding/decoding routines. The code is tailored for use in lattice-based cryptography and digital signatures, with a focus on performances.
 Implementation allows to be run on Solana (tested despite current max transaction size limit) and potentially other Rust compatible chains (untested).
+
+> **Verification is a public-input operation.** Falcon `verify` hashes `nonce ‖ message` (both public, transmitted with the signature), so it uses the **variable-time** `hash_to_point` - the rejection sampler the reference verifier uses - rather than the constant-time oversampling + sorting network. This produces the identical challenge polynomial at a fraction of the cost (see [`OPTIMIZATION_NOTES.md`](./OPTIMIZATION_NOTES.md)). There is no secret on the verify path; constant-time hashing matters only for *signing*, which this crate does not (yet) implement.
 
 ## Features
 
@@ -9,7 +11,7 @@ Implementation allows to be run on Solana (tested despite current max transactio
 - **Montgomery modular arithmetic**: Constant-time multiplication, addition, subtraction, and utility functions for cryptographic fields.
 - **Number Theoretic Transform (NTT)**: Fast polynomial transforms for use in lattice-based cryptography.
 - **Signature verification and encoding**: Utilities for signature checking and public key handling, including NTT format conversion.
-- **To be implemented**: 
+- **To be implemented**:
   - `keygen`
   - `sign`
 
@@ -24,7 +26,9 @@ Implementation allows to be run on Solana (tested despite current max transactio
 - `shake_flip(shake_ctx: &mut [u64; 26])`
     - Switches the SHAKE256 context to output mode, after which extraction can occur.
 - `shake_extract(shake_ctx: &mut [u64; 26]) -> [u64; SHAKE_EXTRACT_OUT_CAPACITY_WORDS]`
-    - Extracts ("squeezes") output from the SHAKE256 context in 8-byte chunks.
+    - Extracts ("squeezes") the full constant-time oversample (11 permutations). Kept as the A/B reference.
+- `shake_extract_vartime(shake_ctx: &mut [u64; 26]) -> [u64; SHAKE_VARTIME_WORDS]`
+    - Squeezes only the 9 rate blocks the variable-time sampler needs (the production verify path).
 
 ### Modular Arithmetic (Montgomery)
 
@@ -71,41 +75,63 @@ assert!(valid);
 
 ## Benchmarks
 
-This crate includes a built-in benchmark suite to measure the performance of Falcon512 signature verification and related primitives.
-
-You can run the benchmarks using the provided script:
+The primary benchmark is **deterministic and CPU-load-agnostic**: it counts the exact number of
+instructions executed by `verify` under valgrind/callgrind (via `iai-callgrind`).
+Unlike wall-clock timing, the result is independent of CPU
+frequency, background load, and the host - so it can tell a 2% optimization from noise, and an
+optimization is judged by its instruction delta. See [`OPTIMIZATION_NOTES.md`](./OPTIMIZATION_NOTES.md).
 
 ```sh
-./run_benchmark.sh
+./run_benchmark.sh                                       # deterministic (portable) + wall-clock (native)
+RUSTFLAGS="-C target-cpu=x86-64" cargo bench --bench instr_count   # deterministic, reproducible across machines
+cargo bench --bench wall_clock_benchmark --features bench  # jemalloc wall-clock (ns / cycles / peak memory)
+cargo bench --bench benchmark                            # Criterion wall-clock (ns / ops-sec)
 ```
 
-Example output (ran on a i5-10210U CPU @ 1.60GHz × 8):
+`.cargo/config.toml` sets `target-cpu=native`, so `cargo build --release` and the wall-clock benches
+get the full native ISA (~+10%). The deterministic bench is the exception: `run_benchmark.sh` pins it
+to a fixed baseline `x86-64` (`RUSTFLAGS`) so its instruction counts reproduce on any host - the
+numbers below are those portable counts. (A bare `cargo bench --bench instr_count`, without the
+`RUSTFLAGS` pin, would instead use native and report lower, machine-specific counts.)
+
+All benchmark dependencies (`iai-callgrind`, `criterion`, `jemallocator`, `num-format`) are
+`[dev-dependencies]` - none are compiled into a normal `cargo build`. The wall-clock harness body is
+additionally gated behind the `bench` feature.
+
+Deterministic instruction counts for `verify` (portable codegen, `target-cpu=native` off) - ~−48% /
+−34% versus the original constant-time implementation (see [`OPTIMIZATION_NOTES.md`](./OPTIMIZATION_NOTES.md)):
+
+| NIST KAT | Instructions | Estimated cycles |
+|----------|-------------:|-----------------:|
+| #0  (73-byte message) | 171,114 | 221,122 |
+| #99 (3340-byte message) | 307,448 | 421,982 |
+
+On the first run every metric shows `+inf%` (no baseline); subsequent runs print the delta against
+the previous run - that delta is the optimization signal.
+
+Two wall-clock benchmarks (both under `benches/`) are retained for human-facing numbers only - the
+Criterion `benchmark` (ns / ops-sec) and the jemalloc `wall_clock_benchmark` (ns / CPU cycles / peak
+memory):
 
 ```
---- Running Falcon512 Benchmarks ---
 📊 Falcon512 Verify NIST Test vector 0
-Bench: 100,000 runs, 2521.899 ms total
+Bench: 100,000 runs, 1580.412 ms total
 Avg per call:
-  - Time: 0.025219 ms (39652.66 ops/sec)
-  - CPU Cycles: 86,299
+  - Time: 0.015804 ms (63274.64 ops/sec)
+  - CPU Cycles: 70,088
   - Memory: bytes peak usage 3,604,480
 
-📊 Falcon512 Verify NIST Test vector 99
-Bench: 100,000 runs, 3593.758 ms total
-Avg per call:
-  - Time: 0.035938 ms (27826.02 ops/sec)
-  - CPU Cycles: 109,238
-  - Memory: bytes peak usage 3,616,768
 ```
 
-> **Benchmark Disclaimer:**  
-> Benchmark results may vary significantly depending on your CPU architecture, system load, compiler optimizations, and hardware configuration. These benchmarks are provided for reference only and may not reflect real-world performance in all environments.
+> **Wall-clock disclaimer:** the ns / ops-sec / `rdtsc`-cycle numbers vary significantly with CPU
+> architecture, system load, and hardware. They are reference-only. For tracking optimizations, use
+> the deterministic instruction count above.
 
 ---
 
 ## Security Notes
 
-- All cryptographic routines are implemented to be constant-time, but you should always audit and test for your specific target and platform.
+- This is a **verification-only** crate, and `verify` operates entirely on public data (`nonce ‖ message`, signature, public key). The hash-to-point is therefore variable-time *by design* - see the note at the top. The modular-arithmetic primitives (`mq_montymul`/`mq_add`/`mq_sub`) are branchless; the rejection sampler and decoders are not constant-time and must not be reused on secret inputs (e.g. a future signing path). Always audit for your specific target and platform.
 - Never use these primitives without understanding the Falcon signature scheme and its parameterization.
 - This crate assumes valid inputs and panics on malformed data where appropriate.
 - This code use unchecked maths and unsafe pointer accesses & updates (on bounded indexes).

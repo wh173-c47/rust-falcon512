@@ -3,7 +3,7 @@ use crate::{
         errors::E_INVALID_PUBLIC_KEY, FALCON_PK_SIZE, GMB, IGMB, LOGN, M, N, NONCE_LEN,
         OVER_SAMPLING, Q, R2, SIG_COMP_MAXSIZE,
     },
-    shake256::{shake_extract, shake_flip, shake_inject},
+    shake256::{shake_extract_vartime, shake_flip, shake_inject},
     utils::{mq_add, mq_montymul, mq_sub, revert, sign_extend_u16_to_u32, swap_byte_pairs},
 };
 
@@ -24,6 +24,88 @@ fn handle_hash_to_point_bytes_pair(pair: u64) -> u16 {
     (r | ((pair - 61445) >> 63) - 1) as u16
 }
 
+/// A draw `t` (a 16-bit big-endian word) is rejected iff `t >= 5q = 61445`; otherwise it is
+/// accepted as `t mod q`. `5q < 2^16`, so this fits a `u16`.
+const REJECT_THRESHOLD: u16 = 5 * Q;
+
+/// Variable-time hash-to-point for **verification** (Falcon `hash_to_point_vartime`).
+///
+/// The verifier hashes `nonce ‖ message`, which is fully public - there is no secret to
+/// protect, so the constant-time oversampling + sorting-network compaction of
+/// [`hash_to_point_ct`] is unnecessary work here. The reference verifier `Zf(verify)` itself
+/// uses the variable-time rejection sampler.
+///
+/// [`handle_hash_to_point_bytes_pair`] already maps every 16-bit draw to either its reduced
+/// value in `[0, q)` or the sentinel `0xffff` (raw draw `>= 5q = 61445`). Accepted values are
+/// `< q < 0x8000`, so they can never collide with the sentinel. This streams the SIMD-reduced
+/// XOF output and collects the first `N` non-sentinel coefficients **in stream order**, which is
+/// exactly what the constant-time variant computes - bit-for-bit identical `c` - but without the
+/// `tt1` oversampling buffer or the p-loop conditional-move network.
+///
+/// # Parameters
+/// - `extracted`: The squeezed SHAKE256 stream, as a slice of `u64` (4 big-endian draws each).
+/// - `x`: Output polynomial coefficients (as `[u16; N]`), filled with the `N` accepted draws.
+///
+/// # Panics (debug only)
+/// The caller must squeeze enough draws to accept `N` coefficients; with the oversampled buffer
+/// this is statistically guaranteed (see `shake_extract`). Reaching the end of `extracted`
+/// before `N` acceptances would index out of bounds.
+#[inline(always)]
+pub fn hash_to_point_vartime(extracted: &[u64], x: &mut [u16; N]) {
+    let x_ptr = x.as_mut_ptr();
+
+    unsafe {
+        let ex_ptr = extracted.as_ptr();
+        let mut count = 0usize;
+        let mut u = 0usize;
+
+        loop {
+            let swapped = swap_byte_pairs(*ex_ptr.add(u));
+
+            // 4 big-endian draws per word, low lane first (stream order). Unlike the constant-time
+            // path, the vartime sampler is already branchy, so accept/reduce directly: a draw
+            // `t < 5q` is accepted as `t mod q` (LLVM lowers the constant `% Q` to a multiply-by-
+            // reciprocal, ~4 instructions), and `t >= 5q` is simply skipped. This avoids the
+            // 20-instruction branchless reduction + sentinel that `handle_hash_to_point_bytes_pair`
+            // needs for constant-time. Identical challenge.
+            let t0 = (swapped & 0xffff) as u16;
+            if t0 < REJECT_THRESHOLD {
+                *x_ptr.add(count) = t0 % Q;
+                count += 1;
+                if count == N {
+                    break;
+                }
+            }
+            let t1 = ((swapped >> 0x10) & 0xffff) as u16;
+            if t1 < REJECT_THRESHOLD {
+                *x_ptr.add(count) = t1 % Q;
+                count += 1;
+                if count == N {
+                    break;
+                }
+            }
+            let t2 = ((swapped >> 0x20) & 0xffff) as u16;
+            if t2 < REJECT_THRESHOLD {
+                *x_ptr.add(count) = t2 % Q;
+                count += 1;
+                if count == N {
+                    break;
+                }
+            }
+            let t3 = (swapped >> 0x30) as u16;
+            if t3 < REJECT_THRESHOLD {
+                *x_ptr.add(count) = t3 % Q;
+                count += 1;
+                if count == N {
+                    break;
+                }
+            }
+
+            u += 1;
+        }
+    }
+}
+
 /// Constant-time: produces a new point from a flipped shake256 context.
 ///
 /// # Parameters
@@ -32,7 +114,9 @@ fn handle_hash_to_point_bytes_pair(pair: u64) -> u16 {
 /// - `tt1`: Temporary storage, as mutable `[u16; N]`.
 ///
 /// # Details
-/// Produces a new point from the extracted SHAKE256 state in constant time.
+/// Produces a new point from the extracted SHAKE256 state in constant time. Retained as the
+/// reference for the variable-time path ([`hash_to_point_vartime`]); see the `hash_to_point`
+/// A/B equivalence test.
 #[inline(always)]
 pub fn hash_to_point_ct(extracted: &[u64], x: &mut [u16; N], tt1: &mut [u16; N]) {
     let x_ptr = x.as_mut_ptr();
@@ -42,35 +126,44 @@ pub fn hash_to_point_ct(extracted: &[u64], x: &mut [u16; N], tt1: &mut [u16; N])
         let ex_ptr = extracted.as_ptr();
         let mut u = 0usize;
 
-        while u != 0x80 {
+        loop {
             let raw = *ex_ptr.add(u);
             let swapped = swap_byte_pairs(raw);
 
             let base = u << 2;
             let dest = x_ptr.add(base);
 
-            *dest.add(0) = handle_hash_to_point_bytes_pair(swapped & 0xffff);
+            *dest = handle_hash_to_point_bytes_pair(swapped & 0xffff);
             *dest.add(1) = handle_hash_to_point_bytes_pair((swapped >> 0x10) & 0xffff);
             *dest.add(2) = handle_hash_to_point_bytes_pair((swapped >> 0x20) & 0xffff);
             *dest.add(3) = handle_hash_to_point_bytes_pair(swapped >> 0x30);
 
             u += 1;
+
+            if u == 0x80{
+                break;
+
+            }
         }
 
         let mut out_base = 0usize;
 
-        while u != 0xb3 {
+        loop {
             let raw = *ex_ptr.add(u);
             let swapped = swap_byte_pairs(raw);
             let dest = tt1_ptr.add(out_base);
 
-            *dest.add(0) = handle_hash_to_point_bytes_pair(swapped & 0xffff);
+            *dest = handle_hash_to_point_bytes_pair(swapped & 0xffff);
             *dest.add(1) = handle_hash_to_point_bytes_pair((swapped >> 0x10) & 0xffff);
             *dest.add(2) = handle_hash_to_point_bytes_pair((swapped >> 0x20) & 0xffff);
             *dest.add(3) = handle_hash_to_point_bytes_pair(swapped >> 0x30);
 
             u += 1;
             out_base += 4;
+
+            if u == 0xB3 {
+                break;
+            }
         }
 
         let raw = *ex_ptr.add(0xB3);
@@ -202,13 +295,13 @@ pub fn hash_to_point_ct(extracted: &[u64], x: &mut [u16; N], tt1: &mut [u16; N])
 pub fn mq_ntt(p: &mut [u16; N]) {
     let mut len = N;
     let mut step = 1;
+    let mut stage: u32 = 0;
 
     unsafe {
         let ptr = p.as_mut_ptr();
 
-        while step != N {
+        loop {
             let half = len >> 1;
-            let block_size = len;
             let mut base = 0usize;
 
             for block_idx in 0..step {
@@ -218,20 +311,41 @@ pub fn mq_ntt(p: &mut [u16; N]) {
 
                 for _ in 0..half {
                     let u = *ptr.add(low_idx);
+                    // `v` is fully reduced into [0, q) by the Montgomery multiply.
                     let v = mq_montymul(*ptr.add(high_idx), s);
 
-                    *ptr.add(low_idx) = mq_add(u, v);
-                    *ptr.add(high_idx) = mq_sub(u, v);
+                    // Lazy butterfly (no per-butterfly conditional reduction): the sum and the
+                    // q-biased difference (≡ u−v mod q, kept non-negative) are written back
+                    // unreduced. Values grow by at most q per stage; reduced only after stages 4
+                    // and 8 below. Bound-proven to stay < 5q < 2^16 so they fit `u16`, and the
+                    // largest Montgomery input (< 4q) keeps the single conditional in `mq_montymul`
+                    // valid (pre-reduction value < 2q). See `mq_ntt` notes / OPTIMIZATION_NOTES.md.
+                    *ptr.add(low_idx) = u + v;
+                    *ptr.add(high_idx) = u + Q - v;
 
                     low_idx += 1;
                     high_idx += 1;
                 }
 
-                base += block_size;
+                base += len;
+            }
+
+            stage += 1;
+
+            // Lazy-bound reset: bring values back to [0, q) before they would exceed u16 (after a
+            // 4th consecutive lazy stage the bound is < 5q; another stage would overflow).
+            if stage == 4 || stage == 8 {
+                for i in 0..N {
+                    *ptr.add(i) %= Q;
+                }
             }
 
             len = half;
             step <<= 1;
+
+            if step == N {
+                break;
+            }
         }
     }
 }
@@ -245,7 +359,7 @@ pub fn mq_intt(p: &mut [u16; N]) {
     let mut step = 1;
     let mut blocks = N;
 
-    while blocks > 1 {
+    loop {
         let half_blocks = blocks >> 1;
         let block_size = step << 1;
 
@@ -258,12 +372,20 @@ pub fn mq_intt(p: &mut [u16; N]) {
                 let v = high[j];
 
                 low[j] = mq_add(u, v);
-                high[j] = mq_montymul(mq_sub(u, v), s);
+                // Lazy difference: `u + Q - v` (≡ u − v mod q, in (0, 2q)) replaces the conditional
+                // `mq_sub`. It stays < 2q, so the single conditional inside `mq_montymul` still
+                // lands the product in [0, q) - one fewer reduction per butterfly, no mid-pass
+                // needed (`mq_add` keeps the low path in [0, q)).
+                high[j] = mq_montymul(u + Q - v, s);
             }
         }
 
         step = block_size;
         blocks = half_blocks;
+
+        if blocks == 1 {
+            break;
+        }
     }
 
     // final scaling (× 0x80) for each lane
@@ -548,6 +670,11 @@ pub fn verify_raw(c0: &mut [u16; N], s2: &[u16; N], h: &[u16; N], s1: &mut [u16;
     }
 
     // computes -s1_ = s2_*h_ - c0_ mod ph_i mod q (in s1_[]).
+    //
+    // NB: these tail passes are deliberately *not* fused. In Rust the separate map-style loops each
+    // auto-vectorize; folding them into the distance loop (which carries the `s += z²` reduction
+    // dependency) and interleaving the branchless Montgomery reduction defeats vectorization and
+    // measures ~+5% instructions on a callgrind run.
 
     mq_ntt(s1);
     mq_poly_montymul_ntt(s1, h);
@@ -642,12 +769,17 @@ pub fn verify(nonce_msg: &[u8], sig: &[u8], pk_ntt_fmt: &[u16; N]) -> bool {
     shake_inject(&mut shake_ctx, &nonce_msg);
     shake_flip(&mut shake_ctx);
 
-    let extracted = shake_extract(&mut shake_ctx);
+    // Squeeze only the 9 rate blocks the variable-time sampler needs (Finding B), not the 11 the
+    // constant-time oversample required.
+    let extracted = shake_extract_vartime(&mut shake_ctx);
 
-    let mut tmp_buff = [0u16; N];
     let mut hash_nonce_msg = [0u16; N];
 
-    hash_to_point_ct(&extracted, &mut hash_nonce_msg, &mut tmp_buff);
+    // Verification input is public - use the variable-time rejection sampler (Falcon's verify
+    // path), not the constant-time sorting network. Produces the identical challenge `c`.
+    hash_to_point_vartime(&extracted, &mut hash_nonce_msg);
 
-    verify_raw(&mut hash_nonce_msg, &decoded_sig, pk_ntt_fmt, &mut tmp_buff)
+    let mut s1 = [0u16; N];
+
+    verify_raw(&mut hash_nonce_msg, &decoded_sig, pk_ntt_fmt, &mut s1)
 }

@@ -146,8 +146,21 @@ pub const SHAKE_ROUND_CONSTANTS: [u64; 24] = [
     0x8000000080008008,
 ];
 
-// (shake_extract_len + 7) / 8
+// (shake_extract_len + 7) / 8 - sized for the constant-time M=717-draw oversample.
 pub const SHAKE_EXTRACT_OUT_CAPACITY_WORDS: usize = 180;
+
+// Variable-time squeeze sizing (Finding B). The vartime rejection sampler needs only enough
+// draws to accept N=512 coefficients: expected 512 / (1 - 4091/65536) ≈ 546 draws. Each Keccak
+// rate block yields 17 u64 words = 68 draws. 9 blocks = 612 draws ⇒ E[accepted] ≈ 574, σ ≈ 6,
+// so a short fill is a ~10σ event (never). This drops 2 of the 11 permutations the CT path
+// squeezed (≈ -18% of the Keccak work) while producing the identical challenge.
+//
+// (A streaming squeeze that stops at the exact ~8.03-block average was tried and measured ~+0.4%
+// instructions - these KATs still need the 9th block, and the two-phase buffer vectorizes better
+// than the interleaved stream. See OPTIMIZATION_NOTES.md.)
+pub const SHAKE_VARTIME_BLOCKS: usize = 9;
+pub const SHAKE256_RATE_WORDS: usize = 17;
+pub const SHAKE_VARTIME_WORDS: usize = SHAKE_VARTIME_BLOCKS * SHAKE256_RATE_WORDS; // 153
 
 pub mod errors {
     pub const E_INVALID_PUBLIC_KEY: &str = "INVALID PK";

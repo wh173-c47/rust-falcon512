@@ -1,4 +1,7 @@
-use crate::constants::{M, SHAKE256_RATE, SHAKE_EXTRACT_OUT_CAPACITY_WORDS, SHAKE_ROUND_CONSTANTS};
+use crate::constants::{
+    M, SHAKE256_RATE, SHAKE256_RATE_WORDS, SHAKE_EXTRACT_OUT_CAPACITY_WORDS, SHAKE_ROUND_CONSTANTS,
+    SHAKE_VARTIME_BLOCKS, SHAKE_VARTIME_WORDS,
+};
 
 /// Performs the Theta and Rho steps (step 1) of the Keccak permutation.
 ///
@@ -11,11 +14,36 @@ use crate::constants::{M, SHAKE256_RATE, SHAKE_EXTRACT_OUT_CAPACITY_WORDS, SHAKE
 #[inline(always)]
 fn theta_rho_step_1(p: *mut u64) {
     unsafe {
-        let xor_0_1 = *p.add(1) ^ *p.add(6) ^ *p.add(11) ^ *p.add(16) ^ *p.add(21);
-        let xor_2_3 = *p.add(4) ^ *p.add(9) ^ *p.add(14) ^ *p.add(19) ^ *p.add(24);
-        let xor_4_5 = *p.add(3) ^ *p.add(8) ^ *p.add(13) ^ *p.add(18) ^ *p.add(23);
-        let xor_6_7 = *p.add(0) ^ *p.add(5) ^ *p.add(10) ^ *p.add(15) ^ *p.add(20);
-        let xor_8_9 = *p.add(2) ^ *p.add(7) ^ *p.add(12) ^ *p.add(17) ^ *p.add(22);
+        let p1 = p.add(1);
+        let p2 = p.add(2);
+        let p3 = p.add(3);
+        let p4 = p.add(4);
+        let p5 = p.add(5);
+        let p6 = p.add(6);
+        let p7 = p.add(7);
+        let p8 = p.add(8);
+        let p9 = p.add(9);
+        let p10 = p.add(10);
+        let p11 = p.add(11);
+        let p12 = p.add(12);
+        let p13 = p.add(13);
+        let p14 = p.add(14);
+        let p15 = p.add(15);
+        let p16 = p.add(16);
+        let p17 = p.add(17);
+        let p18 = p.add(18);
+        let p19 = p.add(19);
+        let p20 = p.add(20);
+        let p21 = p.add(21);
+        let p22 = p.add(22);
+        let p23 = p.add(23);
+        let p24 = p.add(24);
+
+        let xor_0_1 = *p1 ^ *p6 ^ *p11 ^ *p16 ^ *p21;
+        let xor_2_3 = *p4 ^ *p9 ^ *p14 ^ *p19 ^ *p24;
+        let xor_4_5 = *p3 ^ *p8 ^ *p13 ^ *p18 ^ *p23;
+        let xor_6_7 = *p ^ *p5 ^ *p10 ^ *p15 ^ *p20;
+        let xor_8_9 = *p2 ^ *p7 ^ *p12 ^ *p17 ^ *p22;
 
         let t_0 = xor_0_1.rotate_left(1) ^ xor_2_3;
         let t_1 = xor_8_9.rotate_left(1) ^ xor_6_7;
@@ -24,31 +52,31 @@ fn theta_rho_step_1(p: *mut u64) {
         let t_4 = xor_6_7.rotate_left(1) ^ xor_4_5;
 
         // Apply theta and rho
-        *p.add(0) ^= t_0;
-        *p.add(1) = (*p.add(1) ^ t_1).rotate_left(1);
-        *p.add(2) = (*p.add(2) ^ t_2).rotate_left(62);
-        *p.add(3) = (*p.add(3) ^ t_3).rotate_left(28);
-        *p.add(4) = (*p.add(4) ^ t_4).rotate_left(27);
-        *p.add(5) = (*p.add(5) ^ t_0).rotate_left(36);
-        *p.add(6) = (*p.add(6) ^ t_1).rotate_left(44);
-        *p.add(7) = (*p.add(7) ^ t_2).rotate_left(6);
-        *p.add(8) = (*p.add(8) ^ t_3).rotate_left(55);
-        *p.add(9) = (*p.add(9) ^ t_4).rotate_left(20);
-        *p.add(10) = (*p.add(10) ^ t_0).rotate_left(3);
-        *p.add(11) = (*p.add(11) ^ t_1).rotate_left(10);
-        *p.add(12) = (*p.add(12) ^ t_2).rotate_left(43);
-        *p.add(13) = (*p.add(13) ^ t_3).rotate_left(25);
-        *p.add(14) = (*p.add(14) ^ t_4).rotate_left(39);
-        *p.add(15) = (*p.add(15) ^ t_0).rotate_left(41);
-        *p.add(16) = (*p.add(16) ^ t_1).rotate_left(45);
-        *p.add(17) = (*p.add(17) ^ t_2).rotate_left(15);
-        *p.add(18) = (*p.add(18) ^ t_3).rotate_left(21);
-        *p.add(19) = (*p.add(19) ^ t_4).rotate_left(8);
-        *p.add(20) = (*p.add(20) ^ t_0).rotate_left(18);
-        *p.add(21) = (*p.add(21) ^ t_1).rotate_left(2);
-        *p.add(22) = (*p.add(22) ^ t_2).rotate_left(61);
-        *p.add(23) = (*p.add(23) ^ t_3).rotate_left(56);
-        *p.add(24) = (*p.add(24) ^ t_4).rotate_left(14);
+        *p ^= t_0;
+        *p1 = (*p1 ^ t_1).rotate_left(1);
+        *p2 = (*p2 ^ t_2).rotate_left(62);
+        *p3 = (*p3 ^ t_3).rotate_left(28);
+        *p4 = (*p4 ^ t_4).rotate_left(27);
+        *p5 = (*p5 ^ t_0).rotate_left(36);
+        *p6 = (*p6 ^ t_1).rotate_left(44);
+        *p7 = (*p7 ^ t_2).rotate_left(6);
+        *p8 = (*p8 ^ t_3).rotate_left(55);
+        *p9 = (*p9 ^ t_4).rotate_left(20);
+        *p10 = (*p10 ^ t_0).rotate_left(3);
+        *p11 = (*p11 ^ t_1).rotate_left(10);
+        *p12 = (*p12 ^ t_2).rotate_left(43);
+        *p13 = (*p13 ^ t_3).rotate_left(25);
+        *p14 = (*p14 ^ t_4).rotate_left(39);
+        *p15 = (*p15 ^ t_0).rotate_left(41);
+        *p16 = (*p16 ^ t_1).rotate_left(45);
+        *p17 = (*p17 ^ t_2).rotate_left(15);
+        *p18 = (*p18 ^ t_3).rotate_left(21);
+        *p19 = (*p19 ^ t_4).rotate_left(8);
+        *p20 = (*p20 ^ t_0).rotate_left(18);
+        *p21 = (*p21 ^ t_1).rotate_left(2);
+        *p22 = (*p22 ^ t_2).rotate_left(61);
+        *p23 = (*p23 ^ t_3).rotate_left(56);
+        *p24 = (*p24 ^ t_4).rotate_left(14);
     }
 }
 
@@ -64,69 +92,102 @@ fn theta_rho_step_1(p: *mut u64) {
 #[inline(always)]
 fn chi_iota_step_1(p: *mut u64, round_constant: u64) {
     unsafe {
-        let mut c_0 = *p.add(0) ^ (*p.add(6) | *p.add(12));
-        let mut c_1 = *p.add(6) ^ (!*p.add(12) | *p.add(18));
-        let mut c_2 = *p.add(12) ^ (*p.add(18) & *p.add(24));
-        let mut c_3 = *p.add(18) ^ (*p.add(24) | *p.add(0));
-        let mut c_4 = *p.add(24) ^ (*p.add(0) & *p.add(6));
+        let p6 = p.add(6);
+        let p12 = p.add(12);
+        let p18 = p.add(18);
+        let p24 = p.add(24);
 
-        *p.add(0) = c_0;
-        *p.add(6) = c_1;
-        *p.add(12) = c_2;
-        *p.add(18) = c_3;
-        *p.add(24) = c_4;
+        let mut c_0 = *p ^ (*p6 | *p12);
+        let mut c_1 = *p6 ^ (!*p12 | *p18);
+        let mut c_2 = *p12 ^ (*p18 & *p24);
+        let mut c_3 = *p18 ^ (*p24 | *p);
+        let mut c_4 = *p24 ^ (*p & *p6);
 
-        c_0 = *p.add(3) ^ (*p.add(9) | *p.add(10));
-        c_1 = *p.add(9) ^ (*p.add(10) & *p.add(16));
-        c_2 = *p.add(10) ^ (*p.add(16) | !*p.add(22));
-        c_3 = *p.add(16) ^ (*p.add(22) | *p.add(3));
-        c_4 = *p.add(22) ^ (*p.add(3) & *p.add(9));
-        *p.add(3) = c_0;
-        *p.add(9) = c_1;
-        *p.add(10) = c_2;
-        *p.add(16) = c_3;
-        *p.add(22) = c_4;
+        *p = c_0;
+        *p6 = c_1;
+        *p12 = c_2;
+        *p18 = c_3;
+        *p24 = c_4;
 
-        let tmp = !*p.add(19);
+        let p3 = p.add(3);
+        let p9 = p.add(9);
+        let p10 = p.add(10);
+        let p16 = p.add(16);
+        let p22 = p.add(22);
 
-        c_0 = *p.add(1) ^ (*p.add(7) | *p.add(13));
-        c_1 = *p.add(7) ^ (*p.add(13) & *p.add(19));
-        c_2 = *p.add(13) ^ (tmp & *p.add(20));
-        c_3 = tmp ^ (*p.add(20) | *p.add(1));
-        c_4 = *p.add(20) ^ (*p.add(1) & *p.add(7));
-        *p.add(1) = c_0;
-        *p.add(7) = c_1;
-        *p.add(13) = c_2;
-        *p.add(19) = c_3;
-        *p.add(20) = c_4;
+        c_0 = *p3 ^ (*p9 | *p10);
+        c_1 = *p9 ^ (*p10 & *p16);
+        c_2 = *p10 ^ (*p16 | !*p22);
+        c_3 = *p16 ^ (*p22 | *p3);
+        c_4 = *p22 ^ (*p3 & *p9);
 
-        let tmp = !*p.add(17);
+        *p3 = c_0;
+        *p9 = c_1;
+        *p10 = c_2;
+        *p16 = c_3;
+        *p22 = c_4;
 
-        c_0 = *p.add(4) ^ (*p.add(5) & *p.add(11));
-        c_1 = *p.add(5) ^ (*p.add(11) | *p.add(17));
-        c_2 = *p.add(11) ^ (tmp | *p.add(23));
-        c_3 = tmp ^ (*p.add(23) & *p.add(4));
-        c_4 = *p.add(23) ^ (*p.add(4) | *p.add(5));
-        *p.add(4) = c_0;
-        *p.add(5) = c_1;
-        *p.add(11) = c_2;
-        *p.add(17) = c_3;
-        *p.add(23) = c_4;
+        let p1 = p.add(1);
+        let p7 = p.add(7);
+        let p13 = p.add(13);
+        let p19 = p.add(19);
+        let p20 = p.add(20);
 
-        let tmp = !*p.add(8);
+        let tmp = !*p19;
 
-        c_0 = *p.add(2) ^ (tmp & *p.add(14));
-        c_1 = tmp ^ (*p.add(14) | *p.add(15));
-        c_2 = *p.add(14) ^ (*p.add(15) & *p.add(21));
-        c_3 = *p.add(15) ^ (*p.add(21) | *p.add(2));
-        c_4 = *p.add(21) ^ (*p.add(2) & *p.add(8));
-        *p.add(2) = c_0;
-        *p.add(8) = c_1;
-        *p.add(14) = c_2;
-        *p.add(15) = c_3;
-        *p.add(21) = c_4;
+        c_0 = *p1 ^ (*p7 | *p13);
+        c_1 = *p7 ^ (*p13 & *p19);
+        c_2 = *p13 ^ (tmp & *p20);
+        c_3 = tmp ^ (*p20 | *p1);
+        c_4 = *p20 ^ (*p1 & *p7);
 
-        *p.add(0) ^= round_constant;
+        *p1 = c_0;
+        *p7 = c_1;
+        *p13 = c_2;
+        *p19 = c_3;
+        *p20 = c_4;
+
+        let p4 = p.add(4);
+        let p5 = p.add(5);
+        let p11 = p.add(11);
+        let p17 = p.add(17);
+        let p23 = p.add(23);
+
+        let tmp = !*p17;
+
+        c_0 = *p4 ^ (*p5 & *p11);
+        c_1 = *p5 ^ (*p11 | *p17);
+        c_2 = *p11 ^ (tmp | *p23);
+        c_3 = tmp ^ (*p23 & *p4);
+        c_4 = *p23 ^ (*p4 | *p5);
+
+        *p4 = c_0;
+        *p5 = c_1;
+        *p11 = c_2;
+        *p17 = c_3;
+        *p23 = c_4;
+
+        let p2 = p.add(2);
+        let p8 = p.add(8);
+        let p14 = p.add(14);
+        let p15 = p.add(15);
+        let p21 = p.add(21);
+
+        let tmp = !*p8;
+
+        c_0 = *p2 ^ (tmp & *p14);
+        c_1 = tmp ^ (*p14 | *p15);
+        c_2 = *p14 ^ (*p15 & *p21);
+        c_3 = *p15 ^ (*p21 | *p2);
+        c_4 = *p21 ^ (*p2 & *p8);
+
+        *p2 = c_0;
+        *p8 = c_1;
+        *p14 = c_2;
+        *p15 = c_3;
+        *p21 = c_4;
+
+        *p ^= round_constant;
     }
 }
 
@@ -141,11 +202,36 @@ fn chi_iota_step_1(p: *mut u64, round_constant: u64) {
 #[inline(always)]
 fn theta_rho_step_2(p: *mut u64) {
     unsafe {
-        let xor_0_1 = *p.add(6) ^ *p.add(9) ^ *p.add(7) ^ *p.add(5) ^ *p.add(8);
-        let xor_2_3 = *p.add(24) ^ *p.add(22) ^ *p.add(20) ^ *p.add(23) ^ *p.add(21);
-        let xor_4_5 = *p.add(18) ^ *p.add(16) ^ *p.add(19) ^ *p.add(17) ^ *p.add(15);
-        let xor_6_7 = *p.add(0) ^ *p.add(3) ^ *p.add(1) ^ *p.add(4) ^ *p.add(2);
-        let xor_8_9 = *p.add(12) ^ *p.add(10) ^ *p.add(13) ^ *p.add(11) ^ *p.add(14);
+        let p1 = p.add(1);
+        let p2 = p.add(2);
+        let p3 = p.add(3);
+        let p4 = p.add(4);
+        let p5 = p.add(5);
+        let p6 = p.add(6);
+        let p7 = p.add(7);
+        let p8 = p.add(8);
+        let p9 = p.add(9);
+        let p10 = p.add(10);
+        let p11 = p.add(11);
+        let p12 = p.add(12);
+        let p13 = p.add(13);
+        let p14 = p.add(14);
+        let p15 = p.add(15);
+        let p16 = p.add(16);
+        let p17 = p.add(17);
+        let p18 = p.add(18);
+        let p19 = p.add(19);
+        let p20 = p.add(20);
+        let p21 = p.add(21);
+        let p22 = p.add(22);
+        let p23 = p.add(23);
+        let p24 = p.add(24);
+
+        let xor_0_1 = *p6 ^ *p9 ^ *p7 ^ *p5 ^ *p8;
+        let xor_2_3 = *p24 ^ *p22 ^ *p20 ^ *p23 ^ *p21;
+        let xor_4_5 = *p18 ^ *p16 ^ *p19 ^ *p17 ^ *p15;
+        let xor_6_7 = *p ^ *p3 ^ *p1 ^ *p4 ^ *p2;
+        let xor_8_9 = *p12 ^ *p10 ^ *p13 ^ *p11 ^ *p14;
 
         let t_0 = xor_0_1.rotate_left(1) ^ xor_2_3;
         let t_1 = xor_8_9.rotate_left(1) ^ xor_6_7;
@@ -153,32 +239,32 @@ fn theta_rho_step_2(p: *mut u64) {
         let t_3 = xor_2_3.rotate_left(1) ^ xor_8_9;
         let t_4 = xor_6_7.rotate_left(1) ^ xor_4_5;
 
-        *p.add(0) ^= t_0;
+        *p ^= t_0;
 
-        *p.add(3) = (*p.add(3) ^ t_0).rotate_left(36);
-        *p.add(1) = (*p.add(1) ^ t_0).rotate_left(3);
-        *p.add(4) = (*p.add(4) ^ t_0).rotate_left(41);
-        *p.add(2) = (*p.add(2) ^ t_0).rotate_left(18);
-        *p.add(6) = (*p.add(6) ^ t_1).rotate_left(1);
-        *p.add(9) = (*p.add(9) ^ t_1).rotate_left(44);
-        *p.add(7) = (*p.add(7) ^ t_1).rotate_left(10);
-        *p.add(5) = (*p.add(5) ^ t_1).rotate_left(45);
-        *p.add(8) = (*p.add(8) ^ t_1).rotate_left(2);
-        *p.add(12) = (*p.add(12) ^ t_2).rotate_left(62);
-        *p.add(10) = (*p.add(10) ^ t_2).rotate_left(6);
-        *p.add(13) = (*p.add(13) ^ t_2).rotate_left(43);
-        *p.add(11) = (*p.add(11) ^ t_2).rotate_left(15);
-        *p.add(14) = (*p.add(14) ^ t_2).rotate_left(61);
-        *p.add(18) = (*p.add(18) ^ t_3).rotate_left(28);
-        *p.add(16) = (*p.add(16) ^ t_3).rotate_left(55);
-        *p.add(19) = (*p.add(19) ^ t_3).rotate_left(25);
-        *p.add(17) = (*p.add(17) ^ t_3).rotate_left(21);
-        *p.add(15) = (*p.add(15) ^ t_3).rotate_left(56);
-        *p.add(24) = (*p.add(24) ^ t_4).rotate_left(27);
-        *p.add(22) = (*p.add(22) ^ t_4).rotate_left(20);
-        *p.add(20) = (*p.add(20) ^ t_4).rotate_left(39);
-        *p.add(23) = (*p.add(23) ^ t_4).rotate_left(8);
-        *p.add(21) = (*p.add(21) ^ t_4).rotate_left(14);
+        *p3 = (*p3 ^ t_0).rotate_left(36);
+        *p1 = (*p1 ^ t_0).rotate_left(3);
+        *p4 = (*p4 ^ t_0).rotate_left(41);
+        *p2 = (*p2 ^ t_0).rotate_left(18);
+        *p6 = (*p6 ^ t_1).rotate_left(1);
+        *p9 = (*p9 ^ t_1).rotate_left(44);
+        *p7 = (*p7 ^ t_1).rotate_left(10);
+        *p5 = (*p5 ^ t_1).rotate_left(45);
+        *p8 = (*p8 ^ t_1).rotate_left(2);
+        *p12 = (*p12 ^ t_2).rotate_left(62);
+        *p10 = (*p10 ^ t_2).rotate_left(6);
+        *p13 = (*p13 ^ t_2).rotate_left(43);
+        *p11 = (*p11 ^ t_2).rotate_left(15);
+        *p14 = (*p14 ^ t_2).rotate_left(61);
+        *p18 = (*p18 ^ t_3).rotate_left(28);
+        *p16 = (*p16 ^ t_3).rotate_left(55);
+        *p19 = (*p19 ^ t_3).rotate_left(25);
+        *p17 = (*p17 ^ t_3).rotate_left(21);
+        *p15 = (*p15 ^ t_3).rotate_left(56);
+        *p24 = (*p24 ^ t_4).rotate_left(27);
+        *p22 = (*p22 ^ t_4).rotate_left(20);
+        *p20 = (*p20 ^ t_4).rotate_left(39);
+        *p23 = (*p23 ^ t_4).rotate_left(8);
+        *p21 = (*p21 ^ t_4).rotate_left(14);
     }
 }
 
@@ -194,99 +280,132 @@ fn theta_rho_step_2(p: *mut u64) {
 #[inline(always)]
 fn chi_iota_pi_step_2(p: *mut u64, round_constant: u64) {
     unsafe {
-        let mut c_0 = *p.add(0) ^ (*p.add(9) | *p.add(13));
-        let mut c_1 = *p.add(9) ^ (!*p.add(13) | *p.add(17));
-        let mut c_2 = *p.add(13) ^ (*p.add(17) & *p.add(21));
-        let mut c_3 = *p.add(17) ^ (*p.add(21) | *p.add(0));
-        let mut c_4 = *p.add(21) ^ (*p.add(0) & *p.add(9));
+        let p9 = p.add(9);
+        let p13 = p.add(13);
+        let p17 = p.add(17);
+        let p21 = p.add(21);
 
-        *p.add(0) = c_0;
-        *p.add(9) = c_1;
-        *p.add(13) = c_2;
-        *p.add(17) = c_3;
-        *p.add(21) = c_4;
+        let mut c_0 = *p ^ (*p9 | *p13);
+        let mut c_1 = *p9 ^ (!*p13 | *p17);
+        let mut c_2 = *p13 ^ (*p17 & *p21);
+        let mut c_3 = *p17 ^ (*p21 | *p);
+        let mut c_4 = *p21 ^ (*p & *p9);
 
-        c_0 = *p.add(18) ^ (*p.add(22) | *p.add(1));
-        c_1 = *p.add(22) ^ (*p.add(1) & *p.add(5));
-        c_2 = *p.add(1) ^ (*p.add(5) | !*p.add(14));
-        c_3 = *p.add(5) ^ (*p.add(14) | *p.add(18));
-        c_4 = *p.add(14) ^ (*p.add(18) & *p.add(22));
-        *p.add(18) = c_0;
-        *p.add(22) = c_1;
-        *p.add(1) = c_2;
-        *p.add(5) = c_3;
-        *p.add(14) = c_4;
+        *p = c_0;
+        *p9 = c_1;
+        *p13 = c_2;
+        *p17 = c_3;
+        *p21 = c_4;
 
-        let tmp = !*p.add(23);
+        let p1 = p.add(1);
+        let p5 = p.add(5);
+        let p14 = p.add(14);
+        let p18 = p.add(18);
+        let p22 = p.add(22);
 
-        c_0 = *p.add(6) ^ (*p.add(10) | *p.add(19));
-        c_1 = *p.add(10) ^ (*p.add(19) & *p.add(23));
-        c_2 = *p.add(19) ^ (tmp & *p.add(2));
-        c_3 = tmp ^ (*p.add(2) | *p.add(6));
-        c_4 = *p.add(2) ^ (*p.add(6) & *p.add(10));
-        *p.add(6) = c_0;
-        *p.add(10) = c_1;
-        *p.add(19) = c_2;
-        *p.add(23) = c_3;
-        *p.add(2) = c_4;
+        c_0 = *p18 ^ (*p22 | *p1);
+        c_1 = *p22 ^ (*p1 & *p5);
+        c_2 = *p1 ^ (*p5 | !*p14);
+        c_3 = *p5 ^ (*p14 | *p18);
+        c_4 = *p14 ^ (*p18 & *p22);
 
-        let tmp = !*p.add(11);
+        *p18 = c_0;
+        *p22 = c_1;
+        *p1 = c_2;
+        *p5 = c_3;
+        *p14 = c_4;
 
-        c_0 = *p.add(24) ^ (*p.add(3) & *p.add(7));
-        c_1 = *p.add(3) ^ (*p.add(7) | *p.add(11));
-        c_2 = *p.add(7) ^ (tmp | *p.add(15));
-        c_3 = tmp ^ (*p.add(15) & *p.add(24));
-        c_4 = *p.add(15) ^ (*p.add(24) | *p.add(3));
-        *p.add(24) = c_0;
-        *p.add(3) = c_1;
-        *p.add(7) = c_2;
-        *p.add(11) = c_3;
-        *p.add(15) = c_4;
+        let p2 = p.add(2);
+        let p6 = p.add(6);
+        let p10 = p.add(10);
+        let p19 = p.add(19);
+        let p23 = p.add(23);
 
-        let tmp = !*p.add(16);
+        let tmp = !*p23;
 
-        c_0 = *p.add(12) ^ (tmp & *p.add(20));
-        c_1 = tmp ^ (*p.add(20) | *p.add(4));
-        c_2 = *p.add(20) ^ (*p.add(4) & *p.add(8));
-        c_3 = *p.add(4) ^ (*p.add(8) | *p.add(12));
-        c_4 = *p.add(8) ^ (*p.add(12) & *p.add(16));
-        *p.add(12) = c_0;
-        *p.add(16) = c_1;
-        *p.add(20) = c_2;
-        *p.add(4) = c_3;
-        *p.add(8) = c_4;
+        c_0 = *p6 ^ (*p10 | *p19);
+        c_1 = *p10 ^ (*p19 & *p23);
+        c_2 = *p19 ^ (tmp & *p2);
+        c_3 = tmp ^ (*p2 | *p6);
+        c_4 = *p2 ^ (*p6 & *p10);
 
-        *p.add(0) ^= round_constant;
+        *p6 = c_0;
+        *p10 = c_1;
+        *p19 = c_2;
+        *p23 = c_3;
+        *p2 = c_4;
 
-        let tmp = *p.add(5);
+        let p3 = p.add(3);
+        let p7 = p.add(7);
+        let p11 = p.add(11);
+        let p15 = p.add(15);
+        let p24 = p.add(24);
 
-        *p.add(5) = *p.add(18);
-        *p.add(18) = *p.add(11);
-        *p.add(11) = *p.add(10);
-        *p.add(10) = *p.add(6);
-        *p.add(6) = *p.add(22);
-        *p.add(22) = *p.add(20);
-        *p.add(20) = *p.add(12);
-        *p.add(12) = *p.add(19);
-        *p.add(19) = *p.add(15);
-        *p.add(15) = *p.add(24);
-        *p.add(24) = *p.add(8);
-        *p.add(8) = tmp;
+        let tmp = !*p11;
 
-        let tmp = *p.add(1);
+        c_0 = *p24 ^ (*p3 & *p7);
+        c_1 = *p3 ^ (*p7 | *p11);
+        c_2 = *p7 ^ (tmp | *p15);
+        c_3 = tmp ^ (*p15 & *p24);
+        c_4 = *p15 ^ (*p24 | *p3);
 
-        *p.add(1) = *p.add(9);
-        *p.add(9) = *p.add(14);
-        *p.add(14) = *p.add(2);
-        *p.add(2) = *p.add(13);
-        *p.add(13) = *p.add(23);
-        *p.add(23) = *p.add(4);
-        *p.add(4) = *p.add(21);
-        *p.add(21) = *p.add(16);
-        *p.add(16) = *p.add(3);
-        *p.add(3) = *p.add(17);
-        *p.add(17) = *p.add(7);
-        *p.add(7) = tmp;
+        *p24 = c_0;
+        *p3 = c_1;
+        *p7 = c_2;
+        *p11 = c_3;
+        *p15 = c_4;
+
+        let p4 = p.add(4);
+        let p8 = p.add(8);
+        let p12 = p.add(12);
+        let p16 = p.add(16);
+        let p20 = p.add(20);
+
+        let tmp = !*p16;
+
+        c_0 = *p12 ^ (tmp & *p20);
+        c_1 = tmp ^ (*p20 | *p4);
+        c_2 = *p20 ^ (*p4 & *p8);
+        c_3 = *p4 ^ (*p8 | *p12);
+        c_4 = *p8 ^ (*p12 & *p16);
+
+        *p12 = c_0;
+        *p16 = c_1;
+        *p20 = c_2;
+        *p4 = c_3;
+        *p8 = c_4;
+
+        *p ^= round_constant;
+
+        let tmp = *p5;
+
+        *p5 = *p18;
+        *p18 = *p11;
+        *p11 = *p10;
+        *p10 = *p6;
+        *p6 = *p22;
+        *p22 = *p20;
+        *p20 = *p12;
+        *p12 = *p19;
+        *p19 = *p15;
+        *p15 = *p24;
+        *p24 = *p8;
+        *p8 = tmp;
+
+        let tmp = *p1;
+
+        *p1 = *p9;
+        *p9 = *p14;
+        *p14 = *p2;
+        *p2 = *p13;
+        *p13 = *p23;
+        *p23 = *p4;
+        *p4 = *p21;
+        *p21 = *p16;
+        *p16 = *p3;
+        *p3 = *p17;
+        *p17 = *p7;
+        *p7 = tmp;
     }
 }
 
@@ -303,16 +422,23 @@ pub fn process_block(shake_ctx: &mut [u64; 26]) {
     let shake_constants_ptr = SHAKE_ROUND_CONSTANTS.as_ptr();
 
     unsafe {
-        *shake_ptr.add(1) = !*shake_ptr.add(1);
-        *shake_ptr.add(2) = !*shake_ptr.add(2);
-        *shake_ptr.add(8) = !*shake_ptr.add(8);
-        *shake_ptr.add(12) = !*shake_ptr.add(12);
-        *shake_ptr.add(17) = !*shake_ptr.add(17);
-        *shake_ptr.add(20) = !*shake_ptr.add(20);
+        let p1 = shake_ptr.add(1);
+        let p2 = shake_ptr.add(2);
+        let p8 = shake_ptr.add(8);
+        let p12 = shake_ptr.add(12);
+        let p17 = shake_ptr.add(17);
+        let p20 = shake_ptr.add(20);
+
+        *p1 = !*p1;
+        *p2 = !*p2;
+        *p8 = !*p8;
+        *p12 = !*p12;
+        *p17 = !*p17;
+        *p20 = !*p20;
 
         // unrolling rounds
         theta_rho_step_1(shake_ptr);
-        chi_iota_step_1(shake_ptr, *shake_constants_ptr.add(0x0));
+        chi_iota_step_1(shake_ptr, *shake_constants_ptr);
         theta_rho_step_2(shake_ptr);
         chi_iota_pi_step_2(shake_ptr, *shake_constants_ptr.add(0x1));
 
@@ -371,12 +497,12 @@ pub fn process_block(shake_ctx: &mut [u64; 26]) {
         theta_rho_step_2(shake_ptr);
         chi_iota_pi_step_2(shake_ptr, *shake_constants_ptr.add(0x17));
 
-        *shake_ptr.add(1) = !*shake_ptr.add(1);
-        *shake_ptr.add(2) = !*shake_ptr.add(2);
-        *shake_ptr.add(8) = !*shake_ptr.add(8);
-        *shake_ptr.add(12) = !*shake_ptr.add(12);
-        *shake_ptr.add(17) = !*shake_ptr.add(17);
-        *shake_ptr.add(20) = !*shake_ptr.add(20);
+        *p1 = !*p1;
+        *p2 = !*p2;
+        *p8 = !*p8;
+        *p12 = !*p12;
+        *p17 = !*p17;
+        *p20 = !*p20;
     }
 }
 
@@ -393,39 +519,21 @@ fn absorb_full_block(shake_ctx: &mut [u64; 26], input_ptr: *const u8) {
     // fn absorb_full_block(shake_ctx: &mut [u64; 26], input_block: &[u8]) {
     unsafe {
         let shake_ptr = shake_ctx.as_mut_ptr();
+        let shake_ptr_u128 = shake_ptr as *mut u128;
+        let input_ptr_u128 = input_ptr as *const u128;
 
-        *shake_ptr.add(0) ^=
-            u64::from_le_bytes(input_ptr.add(0x00).cast::<[u8; 8]>().read_unaligned());
-        *shake_ptr.add(1) ^=
-            u64::from_le_bytes(input_ptr.add(0x08).cast::<[u8; 8]>().read_unaligned());
-        *shake_ptr.add(2) ^=
-            u64::from_le_bytes(input_ptr.add(0x10).cast::<[u8; 8]>().read_unaligned());
-        *shake_ptr.add(3) ^=
-            u64::from_le_bytes(input_ptr.add(0x18).cast::<[u8; 8]>().read_unaligned());
-        *shake_ptr.add(4) ^=
-            u64::from_le_bytes(input_ptr.add(0x20).cast::<[u8; 8]>().read_unaligned());
-        *shake_ptr.add(5) ^=
-            u64::from_le_bytes(input_ptr.add(0x28).cast::<[u8; 8]>().read_unaligned());
-        *shake_ptr.add(6) ^=
-            u64::from_le_bytes(input_ptr.add(0x30).cast::<[u8; 8]>().read_unaligned());
-        *shake_ptr.add(7) ^=
-            u64::from_le_bytes(input_ptr.add(0x38).cast::<[u8; 8]>().read_unaligned());
-        *shake_ptr.add(8) ^=
-            u64::from_le_bytes(input_ptr.add(0x40).cast::<[u8; 8]>().read_unaligned());
-        *shake_ptr.add(9) ^=
-            u64::from_le_bytes(input_ptr.add(0x48).cast::<[u8; 8]>().read_unaligned());
-        *shake_ptr.add(10) ^=
-            u64::from_le_bytes(input_ptr.add(0x50).cast::<[u8; 8]>().read_unaligned());
-        *shake_ptr.add(11) ^=
-            u64::from_le_bytes(input_ptr.add(0x58).cast::<[u8; 8]>().read_unaligned());
-        *shake_ptr.add(12) ^=
-            u64::from_le_bytes(input_ptr.add(0x60).cast::<[u8; 8]>().read_unaligned());
-        *shake_ptr.add(13) ^=
-            u64::from_le_bytes(input_ptr.add(0x68).cast::<[u8; 8]>().read_unaligned());
-        *shake_ptr.add(14) ^=
-            u64::from_le_bytes(input_ptr.add(0x70).cast::<[u8; 8]>().read_unaligned());
-        *shake_ptr.add(15) ^=
-            u64::from_le_bytes(input_ptr.add(0x78).cast::<[u8; 8]>().read_unaligned());
+        // Process first 16 lanes (8 u128 values = 128 bytes) in pairs using u128 XOR
+        // This reduces operations from 17 u64 XORs (16 + 1) to 8 u128 XORs + 1 u64 XOR
+        *shake_ptr_u128 ^= input_ptr_u128.read_unaligned();
+        *shake_ptr_u128.add(1) ^= input_ptr_u128.add(1).read_unaligned();
+        *shake_ptr_u128.add(2) ^= input_ptr_u128.add(2).read_unaligned();
+        *shake_ptr_u128.add(3) ^= input_ptr_u128.add(3).read_unaligned();
+        *shake_ptr_u128.add(4) ^= input_ptr_u128.add(4).read_unaligned();
+        *shake_ptr_u128.add(5) ^= input_ptr_u128.add(5).read_unaligned();
+        *shake_ptr_u128.add(6) ^= input_ptr_u128.add(6).read_unaligned();
+        *shake_ptr_u128.add(7) ^= input_ptr_u128.add(7).read_unaligned();
+
+        // Handle the last u64 (lane 16, bytes 128-135)
         *shake_ptr.add(16) ^=
             u64::from_le_bytes(input_ptr.add(0x80).cast::<[u8; 8]>().read_unaligned());
     }
@@ -560,6 +668,46 @@ pub fn shake_extract(shake_ctx: &mut [u64; 26]) -> [u64; SHAKE_EXTRACT_OUT_CAPAC
         }
 
         bytes_to_extract -= bytes_this_run;
+    }
+
+    shake_ctx[25] = 0x0;
+
+    out
+}
+
+/// Variable-time squeeze (Finding B): extracts exactly [`SHAKE_VARTIME_BLOCKS`] (9) full Keccak
+/// rate blocks - enough draws for the variable-time rejection sampler to accept all `N` challenge
+/// coefficients with an overwhelming safety margin - instead of the 11 permutations the
+/// constant-time oversample required.
+///
+/// Every block is a full 17-word rate (9 × 17 = [`SHAKE_VARTIME_WORDS`] = 153 words, exactly
+/// 1224 bytes), so the rate is copied whole-word - no trailing partial word like [`shake_extract`].
+///
+/// The context must have been flipped to output mode using [`shake_flip()`].
+///
+/// # Parameters
+/// - `shake_ctx`: The SHAKE256 state array (26 `u64` words) to extract from.
+///
+/// # Returns
+/// `SHAKE_VARTIME_WORDS` (153) squeezed `u64` words = 612 big-endian draws.
+pub fn shake_extract_vartime(shake_ctx: &mut [u64; 26]) -> [u64; SHAKE_VARTIME_WORDS] {
+    let mut out = [0u64; SHAKE_VARTIME_WORDS];
+    let out_ptr = out.as_mut_ptr();
+
+    unsafe {
+        let state_ptr = shake_ctx.as_ptr();
+        let mut block = 0usize;
+        let mut word = 0usize;
+
+        while block != SHAKE_VARTIME_BLOCKS {
+            process_block(shake_ctx);
+
+            // Copy the full 17-word (136-byte) rate block.
+            core::ptr::copy_nonoverlapping(state_ptr, out_ptr.add(word), SHAKE256_RATE_WORDS);
+
+            word += SHAKE256_RATE_WORDS;
+            block += 1;
+        }
     }
 
     shake_ctx[25] = 0x0;

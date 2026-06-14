@@ -4,7 +4,7 @@ use crate::{
         OVER_SAMPLING, Q, R2, SIG_COMP_MAXSIZE,
     },
     shake256::{shake_extract_vartime, shake_flip, shake_inject},
-    utils::{mq_add, mq_montymul, mq_sub, revert, sign_extend_u16_to_u32, swap_byte_pairs},
+    utils::{mq_montymul, mq_sub, revert, sign_extend_u16_to_u32, swap_byte_pairs},
 };
 
 /// Handles a pair of bytes as a `u64` and converts it to a field element.
@@ -284,114 +284,250 @@ pub fn hash_to_point_ct(extracted: &[u64], x: &mut [u16; N], tt1: &mut [u16; N])
     }
 }
 
+/// One radix-8 forward (DIT) butterfly: eight inputs `a0..a7`, three Montgomery butterfly levels
+/// done entirely in registers (= three merged radix-2 stages), seven twiddles. Each level's
+/// difference is written with a `+Q` bias so it stays non-negative without a conditional reduction
+/// (the subtracted Montgomery product is always `< q`). Inputs `< q`; outputs `< 4q` (each level
+/// adds at most `q`). Every Montgomery operand is `< 3q < 5q`, so the single conditional inside
+/// [`mq_montymul`] lands the product in `[0, q)`.
+///
+/// Level 0 pairs (0,4)(1,5)(2,6)(3,7) with `s0`; level 1 pairs (0,2)(1,3) with `sa` and
+/// (4,6)(5,7) with `sb`; level 2 pairs (0,1)(2,3)(4,5)(6,7) with `t0..t3`.
+#[inline(always)]
+fn r8_fwd(
+    a0: u16, a1: u16, a2: u16, a3: u16, a4: u16, a5: u16, a6: u16, a7: u16,
+    s0: u16, sa: u16, sb: u16, t0: u16, t1: u16, t2: u16, t3: u16,
+) -> (u16, u16, u16, u16, u16, u16, u16, u16) {
+    let v0 = mq_montymul(a4, s0);
+    let b0 = a0 + v0;
+    let b4 = a0 + Q - v0;
+    let v1 = mq_montymul(a5, s0);
+    let b1 = a1 + v1;
+    let b5 = a1 + Q - v1;
+    let v2 = mq_montymul(a6, s0);
+    let b2 = a2 + v2;
+    let b6 = a2 + Q - v2;
+    let v3 = mq_montymul(a7, s0);
+    let b3 = a3 + v3;
+    let b7 = a3 + Q - v3;
+
+    let w0 = mq_montymul(b2, sa);
+    let c0 = b0 + w0;
+    let c2 = b0 + Q - w0;
+    let w1 = mq_montymul(b3, sa);
+    let c1 = b1 + w1;
+    let c3 = b1 + Q - w1;
+    let w2 = mq_montymul(b6, sb);
+    let c4 = b4 + w2;
+    let c6 = b4 + Q - w2;
+    let w3 = mq_montymul(b7, sb);
+    let c5 = b5 + w3;
+    let c7 = b5 + Q - w3;
+
+    let x0 = mq_montymul(c1, t0);
+    let x1 = mq_montymul(c3, t1);
+    let x2 = mq_montymul(c5, t2);
+    let x3 = mq_montymul(c7, t3);
+
+    (
+        c0 + x0, c0 + Q - x0, c2 + x1, c2 + Q - x1,
+        c4 + x2, c4 + Q - x2, c6 + x3, c6 + Q - x3,
+    )
+}
+
+/// One radix-8 forward pass over the array, merging stages `k, k+1, k+2` (`k ∈ {0, 3, 6}`). Each
+/// group of 8 coefficients is loaded once, transformed in registers, and stored once - so the whole
+/// 9-stage forward NTT is **3 passes** over memory instead of 9, cutting load/store traffic ~3×.
+/// Twiddles are read from `GMB` at the same offsets the radix-2 transform uses for those stages, so
+/// the output ordering is identical (public-key NTT format unchanged).
+#[inline(always)]
+unsafe fn radix8_pass_fwd(ptr: *mut u16, k: usize) {
+    let tk = N >> k; // span of a stage-k block
+    let g = tk >> 3; // stride between the 8 butterfly inputs
+    let base0 = 1usize << k;
+    let base1 = 1usize << (k + 1);
+    let base2 = 1usize << (k + 2);
+    let nblocks = 1usize << k;
+
+    let mut b = 0usize;
+    while b != nblocks {
+        let s0 = GMB[base0 + b];
+        let sa = GMB[base1 + 2 * b];
+        let sb = GMB[base1 + 2 * b + 1];
+        let t0 = GMB[base2 + 4 * b];
+        let t1 = GMB[base2 + 4 * b + 1];
+        let t2 = GMB[base2 + 4 * b + 2];
+        let t3 = GMB[base2 + 4 * b + 3];
+        let bs = b * tk;
+
+        let mut jo = 0usize;
+        while jo != g {
+            let i0 = bs + jo;
+            let (d0, d1, d2, d3, d4, d5, d6, d7) = r8_fwd(
+                *ptr.add(i0), *ptr.add(i0 + g), *ptr.add(i0 + 2 * g), *ptr.add(i0 + 3 * g),
+                *ptr.add(i0 + 4 * g), *ptr.add(i0 + 5 * g), *ptr.add(i0 + 6 * g), *ptr.add(i0 + 7 * g),
+                s0, sa, sb, t0, t1, t2, t3,
+            );
+            *ptr.add(i0) = d0;
+            *ptr.add(i0 + g) = d1;
+            *ptr.add(i0 + 2 * g) = d2;
+            *ptr.add(i0 + 3 * g) = d3;
+            *ptr.add(i0 + 4 * g) = d4;
+            *ptr.add(i0 + 5 * g) = d5;
+            *ptr.add(i0 + 6 * g) = d6;
+            *ptr.add(i0 + 7 * g) = d7;
+
+            jo += 1;
+        }
+        b += 1;
+    }
+}
+
 /// Computes the Number Theoretic Transform (NTT) on a polynomial in-place.
 ///
-/// This is a Rust implementation of the Cooley-Turkey Radix-2 NTT algorithm,
-/// using the Montgomery multiplication for efficiency.
+/// Radix-8 (3-stage-merged) Cooley–Tukey transform using Montgomery multiplication: 9 radix-2
+/// stages collapse into 3 register-resident passes. The lazy butterflies leave values un-reduced
+/// (`< 4q`); a single `% q` pass between the radix-8 passes brings them back to `[0, q)` before they
+/// could exceed `u16`. The final pass leaves the output `< 4q`, which the pointwise Montgomery
+/// multiply that follows reduces.
 ///
 /// # Arguments
 /// * `p` - A mutable slice representing the polynomial coefficients.
 #[inline(always)]
 pub fn mq_ntt(p: &mut [u16; N]) {
-    let mut len = N;
-    let mut step = 1;
-    let mut stage: u32 = 0;
-
     unsafe {
         let ptr = p.as_mut_ptr();
 
-        loop {
-            let half = len >> 1;
-            let mut base = 0usize;
-
-            for block_idx in 0..step {
-                let s = GMB[step + block_idx];
-                let mut low_idx = base;
-                let mut high_idx = base + half;
-
-                for _ in 0..half {
-                    let u = *ptr.add(low_idx);
-                    // `v` is fully reduced into [0, q) by the Montgomery multiply.
-                    let v = mq_montymul(*ptr.add(high_idx), s);
-
-                    // Lazy butterfly (no per-butterfly conditional reduction): the sum and the
-                    // q-biased difference (≡ u−v mod q, kept non-negative) are written back
-                    // unreduced. Values grow by at most q per stage; reduced only after stages 4
-                    // and 8 below. Bound-proven to stay < 5q < 2^16 so they fit `u16`, and the
-                    // largest Montgomery input (< 4q) keeps the single conditional in `mq_montymul`
-                    // valid (pre-reduction value < 2q). See `mq_ntt` notes / OPTIMIZATION_NOTES.md.
-                    *ptr.add(low_idx) = u + v;
-                    *ptr.add(high_idx) = u + Q - v;
-
-                    low_idx += 1;
-                    high_idx += 1;
-                }
-
-                base += len;
-            }
-
-            stage += 1;
-
-            // Lazy-bound reset: bring values back to [0, q) before they would exceed u16 (after a
-            // 4th consecutive lazy stage the bound is < 5q; another stage would overflow).
-            if stage == 4 || stage == 8 {
-                for i in 0..N {
-                    *ptr.add(i) %= Q;
-                }
-            }
-
-            len = half;
-            step <<= 1;
-
-            if step == N {
-                break;
-            }
+        radix8_pass_fwd(ptr, 0);
+        for i in 0..N {
+            *ptr.add(i) %= Q;
         }
+        radix8_pass_fwd(ptr, 3);
+        for i in 0..N {
+            *ptr.add(i) %= Q;
+        }
+        radix8_pass_fwd(ptr, 6);
+    }
+}
+
+/// One radix-8 inverse (GS) butterfly: three merged radix-2 inverse stages done in registers, the
+/// twiddle applied to each level's difference. Inputs `< q`. The "sum" path grows multiplicatively
+/// (unlike the forward), so the two level-1 outer sums are folded back to `< 2q` (`% 2q`) before the
+/// last level; every Montgomery operand then stays `< 4q < 5q` and every stored output `< 4q < 2^16`.
+///
+/// Level 0 pairs (0,1)(2,3)(4,5)(6,7) with `sa,sb,sc,sd`; level 1 pairs (0,2)(1,3) with `ua` and
+/// (4,6)(5,7) with `ub`; level 2 pairs (0,4)(1,5)(2,6)(3,7) with `s2c`.
+#[inline(always)]
+fn r8_intt(
+    a0: u16, a1: u16, a2: u16, a3: u16, a4: u16, a5: u16, a6: u16, a7: u16,
+    sa: u16, sb: u16, sc: u16, sd: u16, ua: u16, ub: u16, s2c: u16,
+) -> (u16, u16, u16, u16, u16, u16, u16, u16) {
+    let b0 = a0 + a1;
+    let b1 = mq_montymul(a0 + Q - a1, sa);
+    let b2 = a2 + a3;
+    let b3 = mq_montymul(a2 + Q - a3, sb);
+    let b4 = a4 + a5;
+    let b5 = mq_montymul(a4 + Q - a5, sc);
+    let b6 = a6 + a7;
+    let b7 = mq_montymul(a6 + Q - a7, sd);
+
+    let c0 = (b0 + b2) % (2 * Q);
+    let c2 = mq_montymul(b0 + 2 * Q - b2, ua);
+    let c1 = b1 + b3;
+    let c3 = mq_montymul(b1 + 2 * Q - b3, ua);
+    let c4 = (b4 + b6) % (2 * Q);
+    let c6 = mq_montymul(b4 + 2 * Q - b6, ub);
+    let c5 = b5 + b7;
+    let c7 = mq_montymul(b5 + 2 * Q - b7, ub);
+
+    (
+        c0 + c4,
+        c1 + c5,
+        c2 + c6,
+        c3 + c7,
+        mq_montymul(c0 + 2 * Q - c4, s2c),
+        mq_montymul(c1 + 2 * Q - c5, s2c),
+        mq_montymul(c2 + 2 * Q - c6, s2c),
+        mq_montymul(c3 + 2 * Q - c7, s2c),
+    )
+}
+
+/// One radix-8 inverse pass over the array, merging inverse stages `k, k+1, k+2` (`k ∈ {0, 3, 6}`).
+/// Like the forward pass it loads/transforms/stores each group of 8 once, so the 9-stage inverse NTT
+/// is 3 passes instead of 9. Twiddles come from `IGMB` at the inverse-stage offsets.
+#[inline(always)]
+unsafe fn radix8_pass_intt(ptr: *mut u16, k: usize) {
+    let tk = 1usize << k; // span between the 8 inputs
+    // Twiddle bases follow the inverse-NTT table layout (stage s reads IGMB[2^(8-s) + blk]):
+    // 256 >> k, 128 >> k, 64 >> k for the three merged stages k, k+1, k+2.
+    let base0 = (N >> 1) >> k;
+    let base1 = (N >> 2) >> k;
+    let base2 = (N >> 3) >> k;
+    let nblocks = base2;
+    let blocksize = 8 * tk;
+
+    let mut bidx = 0usize;
+    while bidx != nblocks {
+        let sa = IGMB[base0 + 4 * bidx];
+        let sb = IGMB[base0 + 4 * bidx + 1];
+        let sc = IGMB[base0 + 4 * bidx + 2];
+        let sd = IGMB[base0 + 4 * bidx + 3];
+        let ua = IGMB[base1 + 2 * bidx];
+        let ub = IGMB[base1 + 2 * bidx + 1];
+        let s2c = IGMB[base2 + bidx];
+        let pp = bidx * blocksize;
+
+        let mut p = pp;
+        let pend = pp + tk;
+        while p != pend {
+            let (d0, d1, d2, d3, d4, d5, d6, d7) = r8_intt(
+                *ptr.add(p), *ptr.add(p + tk), *ptr.add(p + 2 * tk), *ptr.add(p + 3 * tk),
+                *ptr.add(p + 4 * tk), *ptr.add(p + 5 * tk), *ptr.add(p + 6 * tk), *ptr.add(p + 7 * tk),
+                sa, sb, sc, sd, ua, ub, s2c,
+            );
+            *ptr.add(p) = d0;
+            *ptr.add(p + tk) = d1;
+            *ptr.add(p + 2 * tk) = d2;
+            *ptr.add(p + 3 * tk) = d3;
+            *ptr.add(p + 4 * tk) = d4;
+            *ptr.add(p + 5 * tk) = d5;
+            *ptr.add(p + 6 * tk) = d6;
+            *ptr.add(p + 7 * tk) = d7;
+
+            p += 1;
+        }
+        bidx += 1;
     }
 }
 
 /// Computes the Inverse Number Theoretic Transform (iNTT) on a polynomial in-place.
 ///
+/// Radix-8 (3-stage-merged) inverse transform: 9 inverse stages in 3 register-resident passes, a
+/// `% q` pass between them, then the final 1/N (× 0x80) Montgomery scaling that also reduces the
+/// last pass's `< 4q` output into `[0, q)`.
+///
 /// # Arguments
 /// * `p` - A mutable slice representing the polynomial coefficients in NTT domain.
 #[inline(always)]
 pub fn mq_intt(p: &mut [u16; N]) {
-    let mut step = 1;
-    let mut blocks = N;
+    unsafe {
+        let ptr = p.as_mut_ptr();
 
-    loop {
-        let half_blocks = blocks >> 1;
-        let block_size = step << 1;
-
-        for (blk_idx, chunk) in p.chunks_exact_mut(block_size).enumerate() {
-            let s = IGMB[half_blocks + blk_idx];
-            let (low, high) = chunk.split_at_mut(step);
-
-            for j in 0..step {
-                let u = low[j];
-                let v = high[j];
-
-                low[j] = mq_add(u, v);
-                // Lazy difference: `u + Q - v` (≡ u − v mod q, in (0, 2q)) replaces the conditional
-                // `mq_sub`. It stays < 2q, so the single conditional inside `mq_montymul` still
-                // lands the product in [0, q) - one fewer reduction per butterfly, no mid-pass
-                // needed (`mq_add` keeps the low path in [0, q)).
-                high[j] = mq_montymul(u + Q - v, s);
-            }
+        radix8_pass_intt(ptr, 0);
+        for i in 0..N {
+            *ptr.add(i) %= Q;
         }
+        radix8_pass_intt(ptr, 3);
+        for i in 0..N {
+            *ptr.add(i) %= Q;
+        }
+        radix8_pass_intt(ptr, 6);
 
-        step = block_size;
-        blocks = half_blocks;
-
-        if blocks == 1 {
-            break;
+        // final 1/N scaling (× 0x80); also reduces the < 4q output into [0, q).
+        for i in 0..N {
+            *ptr.add(i) = mq_montymul(*ptr.add(i), 0x80);
         }
     }
-
-    // final scaling (× 0x80) for each lane
-    p.iter_mut().for_each(|val| {
-        *val = mq_montymul(*val, 0x80);
-    });
 }
 
 /// Converts a polynomial's coefficients to Montgomery representation in-place.

@@ -42,9 +42,9 @@ Implementation allows to be run on Solana (tested despite current max transactio
 ### Number Theoretic Transform
 
 - `mq_ntt(p: &mut [u16; N])`
-    - Performs an in-place Cooley-Tukey Radix-2 NTT utilizing Montgomery multiplication for speed and security. Used for fast polynomial operations in Falcon.
+    - In-place radix-8 (3-stage-merged) Cooley-Tukey NTT with Montgomery multiplication and deferred reduction. Used for fast polynomial operations in Falcon.
 - `mq_intt(p: &mut [u16; N])`
-    - Performs an in-place Cooley-Tukey Radix-2 inverse NTT utilizing Montgomery multiplication for speed and security. Used for fast polynomial operations in Falcon.
+    - In-place radix-8 inverse NTT (Montgomery, deferred reduction). Used for fast polynomial operations in Falcon.
 
 ### Encoding, Decoding, and Verification
 
@@ -98,13 +98,16 @@ All benchmark dependencies (`iai-callgrind`, `criterion`, `jemallocator`, `num-f
 `[dev-dependencies]` - none are compiled into a normal `cargo build`. The wall-clock harness body is
 additionally gated behind the `bench` feature.
 
-Deterministic instruction counts for `verify` (portable codegen, `target-cpu=native` off) - ~−48% /
-−34% versus the original constant-time implementation (see [`OPTIMIZATION_NOTES.md`](./OPTIMIZATION_NOTES.md)):
+Deterministic instruction counts for `verify` (portable `x86-64` codegen) - ~−64% / −45% versus the
+original constant-time implementation (see [`OPTIMIZATION_NOTES.md`](./OPTIMIZATION_NOTES.md)):
 
 | NIST KAT | Instructions | Estimated cycles |
 |----------|-------------:|-----------------:|
-| #0  (73-byte message) | 171,114 | 221,122 |
-| #99 (3340-byte message) | 307,448 | 421,982 |
+| #0  (73-byte message) | 118,073 | 167,249 |
+| #99 (3340-byte message) | 254,407 | 368,123 |
+
+With `target-cpu=native` (the default release build) these drop further to 98,572 and 220,818
+instructions respectively.
 
 On the first run every metric shows `+inf%` (no baseline); subsequent runs print the delta against
 the previous run - that delta is the optimization signal.

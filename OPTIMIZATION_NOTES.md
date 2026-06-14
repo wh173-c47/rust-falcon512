@@ -1,170 +1,152 @@
-# Falcon-512 (Rust) - Optimization Notes
+# Falcon-512 (Rust) - `verify` optimization notes
 
-NIST/FN-DSA behaviour is preserved throughout: SHAKE256 is untouched (no Poseidon/Pedersen swap),
-the challenge polynomial `c`, the public-key NTT format, and every KAT distance are unchanged.
+A log of how `verify` was optimized and, just as importantly, what was tried and **reverted**. NIST
+/ FN-DSA behaviour is preserved throughout: SHAKE256 is untouched, and the challenge polynomial `c`,
+the public-key NTT format, and every KAT distance are unchanged - the 10 known-answer distances are
+the correctness oracle for every change here.
+
+The recurring theme is that the binding cost on a modern CPU is **whether LLVM can keep work in
+registers and auto-vectorize it**, which is frequently the opposite of what a naive instruction count
+or a register-machine intuition predicts. Several "obvious" wins regress; the section on reverts is
+the interesting part.
 
 ---
 
-## How performance is measured (the agnostic metric)
+## How performance is measured
 
 Wall-clock timing (and `rdtsc` cycles) depends on CPU frequency scaling, background load, and the
-allocator - it cannot tell a 2% win from noise. The replacement is **deterministic instruction
-counting under valgrind/callgrind** via `iai-callgrind` (`benches/instr_count.rs`):
+allocator - it can't tell a 2% win from noise. The optimization signal is instead a **deterministic
+instruction count under valgrind/callgrind**, via `iai-callgrind` (`benches/instr_count.rs`):
 
 ```sh
 cargo bench --bench instr_count
 ```
 
-The reported *Instructions* / *L1* / *L2* / *RAM* / *Estimated Cycles* are a pure function of the
-executed code path - independent of machine load or host, and reproducible bit-for-bit. This is the
-After the first run iai prints each metric's **delta vs the previous run**, so an optimization is judged by its instruction delta, not by a stopwatch.
-The legacy Criterion wall-clock bench (`benches/benchmark.rs`) is kept for human-facing ns/ops-sec
-numbers but is explicitly *not* the optimization signal.
+The reported *Instructions / L1 / L2 / RAM / Estimated Cycles* are a pure function of the executed
+code path. After the first run iai prints each metric's **delta vs the previous run** - that delta is
+the signal. (Caveat: callgrind models cache but **not** branch prediction, so a change that only
+trades a predictable branch for branchless code is invisible here; such changes are judged on the
+wall-clock bench instead.)
 
-> Counts below were taken with the default (portable) codegen - `target-cpu=native` left **off** so
-> the numbers reproduce on any x86-64 host (see `.cargo/config.toml`). Enabling native lowers the
-> absolute counts (auto-vectorization) but makes them machine-specific.
+`.cargo/config.toml` enables `target-cpu=native`, so `cargo build --release` and the wall-clock
+benches use the full host ISA (~10% fewer instructions from auto-vectorization). The deterministic
+bench is the exception: `run_benchmark.sh` pins it to a fixed baseline `x86-64` so its counts
+reproduce on any host. Both sets of numbers are reported below.
 
 ---
 
-## Results (instructions, `verify`)
+## Results (`verify`, instructions)
+
+Portable (`x86-64`) counts - the reproducible metric:
 
 | stage | KAT 0 | Δ vs baseline | KAT 99 | Δ vs baseline |
 |-------|------:|--------:|-------:|---------:|
-| **baseline** (CT hash-to-point, 11 perms) | 327,957 | - | 464,280 | - |
-| **+A** variable-time hash-to-point | 197,466 | −39.8% | 333,766 | −28.1% |
-| **+B** 9 SHAKE permutations | 185,568 | −43.4% | 321,868 | −30.7% |
-| **+C** vartime sampler via `% q` (Round 2) | 180,076 | −45.1% | 316,410 | −31.8% |
-| **+D** lazy forward NTT (Round 2) | 173,994 | −46.9% | 310,328 | −33.2% |
-| **+E** lazy inverse subtraction (Round 2) | **171,114** | **−47.8%** | **307,448** | **−33.8%** |
+| baseline (constant-time hash-to-point, 11 permutations) | 327,957 | - | 464,280 | - |
+| variable-time hash-to-point, 9 permutations, `% q` sampler | 180,076 | −45.1% | 316,410 | −31.8% |
+| deferred-reduction (lazy) NTT butterflies | 171,114 | −47.8% | 307,448 | −33.8% |
+| **radix-8 stage-merged NTT (forward + inverse)** | **118,073** | **−64.0%** | **254,407** | **−45.2%** |
 
-Estimated cycles track the same shape. KAT 99 starts higher and moves less in % because its
-3340-byte message spends ~35% of the work in the SHAKE *absorb* permutations, which none of these
-findings touch.
+For reference, the same final build with `target-cpu=native`: **KAT 0 = 98,572** (cycles 153,143),
+**KAT 99 = 220,818** (cycles 340,063).
 
-Reverted (measured regressions - see below): F7 INTT-tail fusion (+5%), streaming squeeze (+0.4%),
-forward NTT as slices / inverse NTT as raw pointers (+6.3% / +2.1%), final-1/N-scaling fold
-(de-vectorizes the `s2` reduce).
+KAT 99 moves less in % because its 3340-byte message spends a large fraction of its time in the SHAKE
+*absorb* permutations, which none of these changes touch.
 
 ---
 
-## Findings that ported (algorithmic, cost-model-independent)
+## Optimizations applied
 
-### A - variable-time hash-to-point  ✅ biggest win
-The verifier hashes `nonce ‖ message`, which is fully **public** - there is no secret to protect, so
-the constant-time oversampling + sorting-network compaction (`hash_to_point_ct`) is wasted work; the
-reference verifier itself uses the rejection sampler. The per-draw reducer
-(`handle_hash_to_point_bytes_pair`) already maps each 16-bit draw to its value in `[0,q)` or the
-`0xffff` rejection sentinel, so `hash_to_point_vartime` just collects the first `N` non-sentinel
-draws in stream order. This deletes the `tt1` oversample buffer and the entire p-loop conditional-
-move network. Output is **bit-identical** to the CT challenge - proved by
-`tests::hash_to_point_ab::ct_and_vartime_produce_identical_challenge`
-and by the 10 KAT distances still matching exactly through the production path.
+### Variable-time hash-to-point
+The verifier hashes `nonce ‖ message`, which is entirely **public** - there is no secret to protect,
+so the constant-time oversampling + sorting-network compaction (`hash_to_point_ct`) is wasted work.
+`hash_to_point_vartime` instead streams the squeezed XOF and collects the first `N` accepted draws in
+stream order. This deletes the oversample buffer and the whole conditional-move compaction network.
+The output is bit-identical to the constant-time challenge - proven by
+`tests::hash_to_point_ab::ct_and_vartime_produce_identical_challenge` and by the KAT distances.
 
-### B - fewer SHAKE permutations  ✅
-Vartime needs only ~546 draws to accept 512 coefficients (rejection ≈ 6.24%). Nine Keccak rate
-blocks = 612 draws ⇒ E[accepted] ≈ 574, σ ≈ 6 - a short fill is a ~10σ event. `shake_extract_vartime`
-squeezes a fixed 9 blocks instead of the 11 the CT oversample required, dropping 2 of the costliest
-operations in the function (~5.6k instructions each). Every block is a full 17-word rate, so it is
-copied whole-word (no trailing partial copy).
+### Fewer SHAKE permutations
+The variable-time sampler needs only ~546 draws to accept 512 coefficients (rejection ≈ 6.24%). Nine
+Keccak rate blocks give 612 draws ⇒ E[accepted] ≈ 574, σ ≈ 6 - a short fill is a ~10σ event.
+`shake_extract_vartime` squeezes a fixed 9 blocks instead of the 11 the constant-time oversample
+required, dropping 2 of the most expensive operations in the function. Each block is a full 17-word
+rate, copied whole-word.
 
----
+### Direct `% q` in the sampler
+The per-draw reducer used a ~20-instruction **branchless** reduction (four subtract rounds + a
+sentinel) because it served the constant-time path. The variable-time sampler is already branchy, so
+it collapses to `if t < 5q { t % q }`. LLVM lowers the constant `% 12289` to a ~4-instruction
+multiply-by-reciprocal, and the reject branch is ~94% not-taken - a real win on both instructions and
+cycles. (≈ −15 instructions on each of ~550 draws.)
 
-## Deeper, after a line-level callgrind profile
+### Deferred-reduction (lazy) NTT butterflies
+`q = 12289` leaves headroom up to `5q < 2^16` in a `u16`. Because each Montgomery twiddle product is
+already `< q`, a butterfly's sum and its `q`-biased difference (`u + Q − v`, ≡ `u − v mod q`, kept
+non-negative) can be written back **without a per-butterfly conditional reduction**; values grow by
+at most `q` per level and are folded back with a single `% q` pass only when they approach the `u16`
+ceiling. This removes the branchless conditional reductions from the hot path. The bound schedule is
+machine-checked by z3 (`z3/lazy_ntt_bounds.py`): it proves, over the exact REDC bit arithmetic, that
+every stored value stays `< 2^16` and that the single conditional inside `mq_montymul` still lands the
+product in `[0, q)` for operands up to `4q`.
 
-A per-line profile (`callgrind_annotate --auto=yes`) showed the remaining cost concentrated in two
-places: the SHAKE permutation (irreducible - NIST) and the **Montgomery arithmetic in the NTT
-(~29%)**, within which the *conditional reductions* alone were ~12.8% of the whole `verify`. Plus a
-6% surprise in the hash-to-point reducer. Three wins followed, all output-identical (the 10 KAT
-distances + the CT≡vartime A/B test gate every one).
+### Radix-8 stage-merged NTT (the big one)
+The largest single win. A radix-2 NTT makes **9 passes** over the 512-element array (each pass = 512
+loads + 512 stores); the multiply count is fixed but the memory traffic is not. The transform is
+re-expressed as a **radix-8** transform: nine stages collapse into **3 passes**, each loading a group
+of 8 coefficients once, running all three butterfly levels (12 sub-butterflies, 7 twiddles) entirely
+in registers, and storing 8 once - cutting load/store traffic ~3× and keeping every intermediate
+register-resident. Twiddles are read from `GMB`/`IGMB` at the same offsets the radix-2 stages use, so
+the output ordering - and therefore the public-key NTT format - is unchanged.
 
-### C - vartime hash-to-point via `% q`  ✅ (−2.9% / −1.7%)
-`handle_hash_to_point_bytes_pair` does a 20-instruction **branchless** reduction (4 subtract rounds
-+ a sentinel) on every draw - branchless because it serves the *constant-time* path. The vartime
-sampler is already branchy (it accepts/rejects), so for it the whole thing collapses to
-`if t < 5q { t % q }`. LLVM lowers the constant `% 12289` to a ~4-instruction multiply-by-reciprocal,
-and the reject branch is ~94% not-taken (predictable - so this is a real cycle win, not a
-branch-misprediction trick the Ir metric can't see). ~15 fewer instructions on each of ~550 draws.
+Forward and inverse differ in their growth:
+- **Forward** is clean in `u16`: each level adds at most `q` (the multiply output is `< q`), so a
+  group's values stay `< 4q` across the three levels; one `% q` pass between radix-8 passes resets
+  them. Every Montgomery operand stays `< 3q < 5q`, which the z3 proof already covers.
+- **Inverse** sums grow *multiplicatively*, so the two level-1 outer sums are folded back to `< 2q`
+  (`% 2q`) inside the butterfly; that keeps every stored output `< 4q < 2^16` and every Montgomery
+  operand `< 4q`.
 
-### D - lazy forward NTT  ✅ (−3.4% / −1.9%)
-q=12289 leaves headroom up to 5q < 2^16 in a `u16`. In the DIT forward butterfly the
-twiddle product `v` is already in [0, q), so the sum and the **q-biased difference** `u + Q − v`
-(≡ u−v mod q, kept non-negative) can be written back **without the per-butterfly conditional
-reductions** - values grow by ≤ q per stage and are reduced (one `% q` pass) only after stages 4 and
-8. This removes the `mq_add`/`mq_sub` conditionals from the hot loop (the forward NTT no longer calls
-either). The bound schedule is **machine-checked by z3** (`z3/lazy_ntt_bounds.py`): it proves every
-stored value stays < 2^16 and that the single conditional inside `mq_montymul` still lands in [0, q)
-for operands up to 4q (pre-reduction value < 2q), reasoning over the exact REDC bit arithmetic.
-
-### E - lazy inverse subtraction  ✅ (−1.7% / −0.9%)
-The GS inverse butterfly's `low' = u+v` path grows *multiplicatively*, so it can't go fully lazy in
-16 bits - but the difference feeding the Montgomery multiply can. `mq_sub(u,v)` is replaced by the
-biased `u + Q − v` (< 2q, which keeps the multiply's single conditional valid, z3-checked), dropping
-one conditional reduction per butterfly with **no** mid-pass (the `mq_add` low path stays in [0, q)).
-After D+E, `mq_sub` has essentially vanished from the profile and `mq_add` is ~6× cheaper.
-
----
-
-## Findings that REVERSED
-
-### F7 / E1 - fusing the INTT tail  ❌ implemented, measured, reverted
-Collapsing `1/N scale → −c0 → center → square` into one pass removed real per-loop and
-dict-traffic overhead (−43.5k steps). In Rust it is a **pessimization (+5.1% / +2.9% instructions)**
-and was reverted. Reason: the four tail passes are simple *map* loops with no loop-carried
-dependency, so LLVM auto-vectorizes each into SIMD. The distance accumulation, by contrast, carries
-a `s += z²` reduction dependency. Fusing the maps *into* the reduction loop - and interleaving the
-branchless Montgomery reduction - serializes work that was parallel and blocks vectorization. The
-separate-pass form is kept; see the comment in `verify_raw`. This is the headline example of "the
-outcome is totally different on a real CPU."
-
-### Streaming squeeze  ❌ tried, reverted (+0.4%)
-Squeezing block-by-block and stopping the instant 512 coefficients are accepted,
-to hit the ~8.03-permutation average instead of a fixed 9. Implemented as a fused
-`hash_to_point_streaming` (squeeze + sample in one pass, no intermediate buffer). Measured **+0.4% /
-+0.2% instructions** and reverted. Two reasons: (1) for these KAT vectors 512 is *not* reached within
-8 blocks, so no permutation is actually saved; (2) the two-phase form - a tight `copy_nonoverlapping`
-squeeze into a contiguous 153-word buffer, then a flat 4-lane sampling loop - vectorizes better than
-the interleaved stream, whose per-block re-entry and labelled break inhibit it. The fixed-9
-`shake_extract_vartime` + `hash_to_point_vartime` is kept.
-
-### NTT loop form: raw pointers vs `split_at_mut` slices  ❌ both directions tried, reverted
-The forward NTT uses raw pointers; the inverse uses `chunks_exact_mut().enumerate()` +
-`split_at_mut`. Making them uniform regressed **either way**:
-- inverse → raw pointers: **+2.1%** (raw `*mut` reintroduces possible aliasing, so LLVM can't
-  vectorize the butterfly; `split_at_mut` *proves* the two halves disjoint and unlocks it),
-- forward → slices: **+6.3%** (the forward butterfly multiplies the *read* half by the twiddle before
-  the add/sub, and that shape codegens better as straight-line pointer arithmetic).
-
-The asymmetry is the lesson: each NTT direction was already sitting at its own codegen optimum - the
-existing mix (forward = raw pointer, inverse = slice) is *not* an inconsistency to clean up but a
-tuned result. On a real CPU "make it uniform / make it `unsafe`" is not a free win; the binding factor
-is whether the compiler can prove non-aliasing and vectorize, which differs per loop shape.
+Result: forward radix-8 alone was −18.3% (native); adding the inverse took the session total to −36%
+(native) / the cumulative figures in the table.
 
 ---
 
-## Out of scope (would break NIST/format invariants)
+## Tried, measured, reverted (the CPU-specific lessons)
 
-- **Radix-4 / split-radix NTT.** Its classic benefit is *fewer multiplies* - which is real on a CPU
-  (unlike post-F1b), so this is the one genuinely open avenue. But
-  it reorders the transform, and the public key is supplied **already in radix-2 NTT format**
-  (precomputed offchain); changing the layout would require regenerating every public key and KAT
-  vector.
-- **comp_decode de-Bruijn bit-scan (F3).** Real signatures have short Gaussian unary runs (~0–2
-  bits), so the bit loop already terminates in 1–2 iterations; the perfect-hash adds complexity for
-  no measurable gain. Deferred.
+- **Fusing the inverse-NTT tail** (`1/N scale → −c0 → center → square` into one pass): **+5.1% /
+  +2.9%**. The four tail passes are simple *map* loops that each auto-vectorize; the distance step
+  carries a `s += z²` reduction dependency. Folding the maps into the reduction loop - and
+  interleaving the branchless Montgomery reduction - serializes work that was parallel and blocks
+  vectorization. Kept separate.
+- **Folding the final `1/N` scaling into the `s2` reduce / into the last inverse pass**: same trap -
+  injecting `mq_montymul` (with its conditional) into an otherwise 16-wide auto-vectorized map pass
+  de-vectorizes it. The scaling stays a separate, vectorizable pass.
+- **Streaming squeeze** (interleave the squeeze with sampling, stop at exactly 512): **+0.4%**. For
+  these vectors 512 isn't reached within 8 blocks (no permutation saved), and the two-phase form - a
+  tight `copy_nonoverlapping` into a contiguous buffer, then a flat sampling loop - vectorizes better
+  than the interleaved stream.
+- **Making the two NTT directions use the same loop form**: regressed **either** way (slices for the
+  forward: +6.3%; raw pointers for the inverse: +2.1%). `split_at_mut` *proves* the two halves
+  disjoint and unlocks vectorization where raw `*mut` can't; the best loop shape differs per direction.
+
+The throughline: keep simple element-wise passes separate so they auto-vectorize, and don't reach for
+`unsafe`/manual fusion as if it were free - on a real CPU the binding factor is whether the compiler
+can prove non-aliasing and vectorize.
 
 ---
 
-## Where the remaining cost is
+## Where the remaining cost is, and the open levers
 
-A callgrind function breakdown (`callgrind_annotate target/iai/instr_count/callgrind.verify_kat_99.out`)
-shows the floor is the **SHAKE/Keccak permutation**:
+After radix-8 the profile (KAT 0) is roughly: **SHAKE squeeze ~40%**, **Montgomery multiplies in the
+NTT butterflies ~17%**, `comp_decode` ~12%, and assorted already-vectorized passes (pointwise,
+scaling, reduces, normalize, distance).
 
-- KAT 99: `shake_inject` (absorb) ≈ 35% + `shake_extract_vartime` (squeeze) ≈ 12% ≈ **47%** SHAKE;
-  the rest is the NTT pair, hash-to-point, and `comp_decode`.
-- KAT 0 (short message, 0 absorb perms): the 9 squeeze permutations dominate.
-
-`process_block` is already a hand-unrolled, pointer-based Keccak-f1600 using the `rotate_left`
-intrinsic. Beyond it, the only lever is an AVX2/SIMD Keccak (machine-specific, `target-cpu=native`)
-or moving the permutation off the critical path - neither of which is a NIST-preserving, portable
-source change.
+- **SHAKE / Keccak (~40%)** is the floor: NIST-mandated, and `process_block` is already a hand-unrolled
+  Keccak-f1600 on `rotate_left`. Dropping below 9 squeeze permutations is statistically unsafe; the
+  absorb permutations for long messages are inherent.
+- **NTT butterfly multiplies (~17%)** are scalar and strided, so they don't auto-vectorize. The open
+  lever is an explicit **AVX2 Montgomery NTT** (e.g. the four level-0 products in a radix-8 group
+  share a twiddle and could be one SIMD op). It is target-specific (needs a scalar fallback) and
+  would not show up in the portable deterministic metric, so it is left as a separate, focused effort.
+- **`comp_decode` (~12%)** is tight, bit-accurate Golomb-Rice; its only obvious change (branchless
+  conditional-negate of the sign) trades a 50/50 branch the deterministic metric can't even see, so
+  it's judged not worth the bit-twiddling risk.

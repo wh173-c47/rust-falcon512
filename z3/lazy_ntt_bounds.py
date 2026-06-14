@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Formal proof (z3) that the lazy NTT in src/falcon512.rs is correct and overflow-free for q=12289
-with u16 storage. Three obligations:
+Formal proof (z3) that the deferred-reduction radix-8 NTT in src/falcon512.rs is correct and
+overflow-free for q=12289 with u16 storage. Three obligations:
 
   (1) MULT SAFETY: mq_montymul's final reduction is a SINGLE conditional subtract, so it only lands
       in [0, q) when its pre-conditional REDC value t < 2q. We prove t < 2q for the largest operand
@@ -9,10 +9,11 @@ with u16 storage. Three obligations:
   (2) U32 SAFETY: the Rust `res + m*Q` is computed in u32; prove it never reaches 2^32.
   (3) STORAGE: every value written back by a lazy butterfly fits in u16 (< 2^16).
 
-Schedule (forward, DIT): the multiply output is fully reduced (< q), so the stored values grow by
-at most q per stage; reduced back to [0,q) after stages 4 and 8. Hence the largest operand into the
-multiply is < 4q and the largest value stored is < 5q. Inverse (GS): the biased difference
-`u + Q - v` (< 2q) is the multiply operand.
+Schedule: each radix-8 pass runs three butterfly levels in registers before storing, then a `% q`
+pass resets the values. A Montgomery output is always fully reduced (< q), so the forward butterfly's
+biased sum/difference grows by at most q per level (operand < 3q across the 3 levels, stored < 4q);
+the inverse folds its two level-1 outer sums back to < 2q, so its operands stay < 4q and stored
+values < 4q. Proving the multiply valid for operands up to 4q therefore covers both directions.
 """
 from z3 import BitVec, BitVecVal, ULT, ULE, Solver, unsat
 
@@ -62,5 +63,6 @@ for k in (1, 2, 3, 4):
           f" high' < 2^16 -> {'PROVED' if proved(s_high) else 'FAILED'}")
     assert proved(s_low) and proved(s_high)
 
-print("\nALL OBLIGATIONS PROVED: the lazy NTT is overflow-free and the single-conditional Montgomery")
-print("reduction stays valid for q=12289 with u16 storage (reduce after stages 4 and 8).")
+print("\nALL OBLIGATIONS PROVED: the deferred-reduction radix-8 NTT is overflow-free and the single-")
+print("conditional Montgomery reduction stays valid for q=12289 with u16 storage (operands < 4q,")
+print("stored values < 2^16, with a % q pass between the radix-8 passes).")

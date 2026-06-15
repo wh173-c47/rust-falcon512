@@ -103,10 +103,10 @@ original constant-time implementation (see [`OPTIMIZATION_NOTES.md`](./OPTIMIZAT
 
 | NIST KAT | Instructions | Estimated cycles |
 |----------|-------------:|-----------------:|
-| #0  (73-byte message) | 118,073 | 167,249 |
-| #99 (3340-byte message) | 254,407 | 368,123 |
+| #0  (73-byte message) | 117,649 | 166,825 |
+| #99 (3340-byte message) | 253,983 | 367,699 |
 
-With `target-cpu=native` (the default release build) these drop further to 98,572 and 220,818
+With `target-cpu=native` (the default release build) these drop further to 98,568 and 220,814
 instructions respectively.
 
 On the first run every metric shows `+inf%` (no baseline); subsequent runs print the delta against
@@ -116,13 +116,22 @@ Two wall-clock benchmarks (both under `benches/`) are retained for human-facing 
 Criterion `benchmark` (ns / ops-sec) and the jemalloc `wall_clock_benchmark` (ns / CPU cycles / peak
 memory):
 
+*run on an Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz*
 ```
+--- Running Falcon512 Benchmarks ---
 📊 Falcon512 Verify NIST Test vector 0
-Bench: 100,000 runs, 1580.412 ms total
+Bench: 100,000 runs, 1204.019 ms total
 Avg per call:
-  - Time: 0.015804 ms (63274.64 ops/sec)
-  - CPU Cycles: 70,088
+  - Time: 0.012040 ms (83055.18 ops/sec)
+  - CPU Cycles: 66,842
   - Memory: bytes peak usage 3,604,480
+
+📊 Falcon512 Verify NIST Test vector 99
+Bench: 100,000 runs, 2589.878 ms total
+Avg per call:
+  - Time: 0.025899 ms (38611.86 ops/sec)
+  - CPU Cycles: 96,986
+  - Memory: bytes peak usage 3,616,768
 
 ```
 

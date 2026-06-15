@@ -1,13 +1,30 @@
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        falcon512::{pk_to_ntt_fmt, verify},
+        constants::N,
+        falcon512::{comp_decode, pk_to_ntt_fmt, verify},
         tests::test_utils::{get_valid_test_vector, mutation_utils::*},
     };
 
     // Helper to ensure mutation really changed the data
     fn assert_mutated<T: PartialEq + std::fmt::Debug>(orig: &[T], mutated: &[T]) {
         assert_ne!(orig, mutated, "Mutation did not change the data!");
+    }
+
+    /// A mutated signature may legitimately verify if it is merely a different *encoding* of the
+    /// same coefficient vector - Falcon's compressed format has unused trailing bits that
+    /// `comp_decode` does not constrain, so flipping one yields the same decoded `s2`. That is not a
+    /// forgery. A mutation that verifies as a **distinct** decoded vector would be, so this asserts
+    /// the mutation either rejects or decodes identically to the original signature.
+    fn assert_not_forgery(msg: &[u8], mutated: &[u8], pk_ntt: &[u16; N], sig: &[u8], label: &str) {
+        if verify(msg, mutated, pk_ntt) {
+            let (decoded_mut, _) = comp_decode(mutated);
+            let (decoded_sig, _) = comp_decode(sig);
+            assert_eq!(
+                decoded_mut, decoded_sig,
+                "{label}: a mutated signature verified as a DISTINCT vector (forgery)"
+            );
+        }
     }
 
     #[test]
@@ -33,6 +50,7 @@ pub mod tests {
     #[test]
     fn fuzz_flip_sig_bits() {
         let (msg, pk, sig) = get_valid_test_vector();
+        let pk_ntt = pk_to_ntt_fmt(pk.as_slice().try_into().unwrap());
 
         for n in [1, 3, 8, 16, 32, 64, 128, 256, 512] {
             let mut mutated = sig.clone();
@@ -40,37 +58,21 @@ pub mod tests {
             flip_sig_bit(&mut mutated, n);
 
             assert_mutated(&sig, &mutated);
-            assert!(
-                !verify(
-                    &msg,
-                    &mutated,
-                    &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())
-                ),
-                "Bit-flipped sig ({}x) should not verify",
-                n
-            );
+            assert_not_forgery(&msg, &mutated, &pk_ntt, &sig, &format!("bit-flip {n}x"));
         }
     }
 
     #[test]
     fn fuzz_swap_sig_bytes() {
         let (msg, pk, sig) = get_valid_test_vector();
+        let pk_ntt = pk_to_ntt_fmt(pk.as_slice().try_into().unwrap());
 
         for n in [1, 4, 10, 16, 32, 64, 128, 256, 512] {
             let mut mutated = sig.clone();
 
             swap_sig_bytes(&mut mutated, n);
             assert_mutated(&sig, &mutated);
-
-            assert!(
-                !verify(
-                    &msg,
-                    &mutated,
-                    &pk_to_ntt_fmt(pk.as_slice().try_into().unwrap())
-                ),
-                "Swapped sig bytes ({}x) should not verify",
-                n
-            );
+            assert_not_forgery(&msg, &mutated, &pk_ntt, &sig, &format!("byte-swap {n}x"));
         }
     }
 

@@ -815,18 +815,20 @@ pub fn verify_raw(c0: &mut [u16; N], s2: &[u16; N], h: &[u16; N], s1: &mut [u16;
     mq_ntt(s1);
     mq_poly_montymul_ntt(s1, h);
     mq_intt(s1);
-    mq_poly_sub(s1, c0);
 
-    // normalize -s1_ elements into th_e [-q/2..q/2] range.
+    // Subtract c0 and normalize into [-q/2, q/2] in one pass. Both are pure element-wise maps (no
+    // loop-carried dependency), so fusing them keeps the vectorization and removes one 512-element
+    // round-trip - this is *not* the distance loop (which does carry the `s += z²` reduction and
+    // must stay separate).
     let q_shr_1 = Q >> 0x1;
 
     unsafe {
         let s1_ptr = s1.as_mut_ptr();
+        let c0_ptr = c0.as_ptr();
 
         for i in 0..N {
-            let ptr = s1_ptr.add(i);
-
-            *ptr = *ptr - (Q & (0 - (q_shr_1 - *ptr >> 0xf)));
+            let v = mq_sub(*s1_ptr.add(i), *c0_ptr.add(i));
+            *s1_ptr.add(i) = v - (Q & (0 - (q_shr_1 - v >> 0xf)));
         }
     }
 

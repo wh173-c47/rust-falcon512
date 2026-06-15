@@ -44,10 +44,11 @@ Portable (`x86-64`) counts - the reproducible metric:
 | baseline (constant-time hash-to-point, 11 permutations) | 327,957 | - | 464,280 | - |
 | variable-time hash-to-point, 9 permutations, `% q` sampler | 180,076 | −45.1% | 316,410 | −31.8% |
 | deferred-reduction (lazy) NTT butterflies | 171,114 | −47.8% | 307,448 | −33.8% |
-| **radix-8 stage-merged NTT (forward + inverse)** | **118,073** | **−64.0%** | **254,407** | **−45.2%** |
+| radix-8 stage-merged NTT (forward + inverse) | 118,073 | −64.0% | 254,407 | −45.2% |
+| **fused subtract-c0 + normalize tail** | **117,649** | **−64.1%** | **253,983** | **−45.3%** |
 
-For reference, the same final build with `target-cpu=native`: **KAT 0 = 98,572** (cycles 153,143),
-**KAT 99 = 220,818** (cycles 340,063).
+For reference, the same final build with `target-cpu=native`: **KAT 0 = 98,568** (cycles 153,143),
+**KAT 99 = 220,814** (cycles 340,063).
 
 KAT 99 moves less in % because its 3340-byte message spends a large fraction of its time in the SHAKE
 *absorb* permutations, which none of these changes touch.
@@ -111,12 +112,23 @@ Result: forward radix-8 alone was −18.3% (native); adding the inverse took the
 ---
 
 ## Tried, measured, reverted (the CPU-specific lessons)
-
-- **Fusing the inverse-NTT tail** (`1/N scale → −c0 → center → square` into one pass): **+5.1% /
-  +2.9%**. The four tail passes are simple *map* loops that each auto-vectorize; the distance step
-  carries a `s += z²` reduction dependency. Folding the maps into the reduction loop - and
-  interleaving the branchless Montgomery reduction - serializes work that was parallel and blocks
-  vectorization. Kept separate.
+- **SIMD-vectorizing the NTT butterflies**: **no win**, reverted. The pointwise Montgomery mul
+  auto-vectorizes to 0.375 instr/call, so the radix-8 butterflies *can* be vectorized by recasting
+  them structure-of-arrays (element-wise loops over the group runs). But that splits the 3-level
+  butterfly into separate passes that round-trip the intermediates through memory - erasing the
+  advantage the scalar butterfly gets from holding all 8 elements register-resident across the 3
+  levels. A register-resident variant (16 groups at a time through local YMM-sized arrays, kept in
+  registers across the levels) lands flat on the instruction count and within wall-clock noise. A
+  hand-written AVX2 path would do the *same* lane loads/stores, so it cannot beat the scalar version
+  either. The transform is at its register-resident optimum for this size: the cost of moving data
+  in/out of lanes offsets the vectorized arithmetic. (Callgrind counts a 16-wide op as ~1
+  instruction, a SIMD-throughput blind spot - but the wall-clock bench shows nothing hidden there.)
+- **Fusing two pure-map tail passes is fine; fusing into the reduction loop is not.** Combining
+  `subtract-c0 + normalize` (two element-wise maps) into one pass is a small win and is kept. But
+  folding the whole tail (`1/N scale → −c0 → center → square`) into the **distance** loop measured
+  **+5.1% / +2.9%**: the distance step carries a `s += z²` reduction dependency, and folding the
+  maps into it (plus interleaving the branchless Montgomery reduction) serializes work that was
+  parallel and blocks vectorization.
 - **Folding the final `1/N` scaling into the `s2` reduce / into the last inverse pass**: same trap -
   injecting `mq_montymul` (with its conditional) into an otherwise 16-wide auto-vectorized map pass
   de-vectorizes it. The scaling stays a separate, vectorizable pass.
@@ -134,19 +146,18 @@ can prove non-aliasing and vectorize.
 
 ---
 
-## Where the remaining cost is, and the open levers
-
+## Where the remaining cost is
 After radix-8 the profile (KAT 0) is roughly: **SHAKE squeeze ~40%**, **Montgomery multiplies in the
 NTT butterflies ~17%**, `comp_decode` ~12%, and assorted already-vectorized passes (pointwise,
-scaling, reduces, normalize, distance).
+scaling, reduces, normalize, distance). `verify` is at a strong optimum; the three big chunks are all
+either NIST-frozen or already at their register-resident best.
 
-- **SHAKE / Keccak (~40%)** is the floor: NIST-mandated, and `process_block` is already a hand-unrolled
-  Keccak-f1600 on `rotate_left`. Dropping below 9 squeeze permutations is statistically unsafe; the
-  absorb permutations for long messages are inherent.
-- **NTT butterfly multiplies (~17%)** are scalar and strided, so they don't auto-vectorize. The open
-  lever is an explicit **AVX2 Montgomery NTT** (e.g. the four level-0 products in a radix-8 group
-  share a twiddle and could be one SIMD op). It is target-specific (needs a scalar fallback) and
-  would not show up in the portable deterministic metric, so it is left as a separate, focused effort.
+- **SHAKE / Keccak (~40%)** is the floor: NIST-mandated, `process_block` is already a hand-unrolled
+  Keccak-f1600 on `rotate_left`, dropping below 9 squeeze permutations is statistically unsafe, and a
+  single sponge can't be lane-parallelized (wide AVX2 Keccak needs 4 independent sponges).
+- **NTT butterfly multiplies (~17%)** are scalar, as covered above, vectorizing them does not
+  pay: the data movement in/out of SIMD lanes offsets the arithmetic, so the register-resident scalar
+  radix-8 is the optimum here.
 - **`comp_decode` (~12%)** is tight, bit-accurate Golomb-Rice; its only obvious change (branchless
   conditional-negate of the sign) trades a 50/50 branch the deterministic metric can't even see, so
   it's judged not worth the bit-twiddling risk.
